@@ -1,0 +1,18 @@
+# Cache from SEC EDGAR fetches (regenerated automatically)
+cache/
+
+# Personal notes / source transcript not meant for publication
+text-0.txt
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
