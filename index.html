@@ -1,134 +1,575 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>S&amp;P 500 Explorer</title>
-  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@3/dist/tailwind.min.css" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet" />
   <script src="https://cdn.plot.ly/plotly-2.30.0.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
   <style>
-    .tab-btn { @apply px-4 py-2 text-sm font-medium rounded-t-lg border-b-2 border-transparent text-gray-500 hover:text-gray-700; }
-    .tab-btn.active { @apply border-blue-500 text-blue-600; }
+    /* ── MD3 Color Tokens ── */
+    :root[data-theme="dark"] {
+      --bg:           #0f0d18;
+      --surface:      #1c1a2e;
+      --surface-c:    #242238;
+      --surface-ch:   #2d2b44;
+      --on-surface:   #e4e1f5;
+      --on-sv:        #afa9cc;
+      --primary:      #a8c8ff;
+      --on-primary:   #003062;
+      --primary-c:    #1a4d8a;
+      --on-primary-c: #d4e3ff;
+      --outline:      #5e5a7a;
+      --outline-v:    #38354f;
+      --shadow:       rgba(0,0,0,.55);
+      --positive:     #6dd58c;
+      --negative:     #ffb4ab;
+      --plt-bg:       #1c1a2e;
+      --plt-font:     #e4e1f5;
+      --plt-grid:     #38354f;
+      --plt-zero:     #5e5a7a;
+    }
+    :root[data-theme="light"] {
+      --bg:           #f4f2fb;
+      --surface:      #ffffff;
+      --surface-c:    #edeaf5;
+      --surface-ch:   #e4e0f0;
+      --on-surface:   #1b1929;
+      --on-sv:        #48455a;
+      --primary:      #1655a5;
+      --on-primary:   #ffffff;
+      --primary-c:    #d4e3ff;
+      --on-primary-c: #00174e;
+      --outline:      #7b7890;
+      --outline-v:    #cbc7db;
+      --shadow:       rgba(0,0,0,.12);
+      --positive:     #1e7a3c;
+      --negative:     #b3261e;
+      --plt-bg:       #ffffff;
+      --plt-font:     #1b1929;
+      --plt-grid:     #e4e0f0;
+      --plt-zero:     #cbc7db;
+    }
+
+    /* ── Reset & Base ── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; overflow: hidden; }
+    body {
+      font-family: 'Roboto', system-ui, sans-serif;
+      font-size: 14px;
+      line-height: 1.5;
+      background: var(--bg);
+      color: var(--on-surface);
+      display: flex;
+      transition: background .3s, color .3s;
+    }
+
+    /* ── Navigation Drawer ── */
+    .drawer {
+      width: 252px;
+      flex-shrink: 0;
+      background: var(--surface-c);
+      border-right: 1px solid var(--outline-v);
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+    }
+    .drawer-header {
+      padding: 20px 16px 14px;
+      border-bottom: 1px solid var(--outline-v);
+    }
+    .drawer-title {
+      font-size: 20px;
+      font-weight: 500;
+      letter-spacing: -.01em;
+      color: var(--on-surface);
+    }
+    .drawer-subtitle {
+      font-size: 12px;
+      color: var(--on-sv);
+      margin-top: 3px;
+    }
+    .drawer-body { flex: 1; padding: 14px 12px; }
+    .section-label {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--on-sv);
+      text-transform: uppercase;
+      letter-spacing: .07em;
+      padding: 0 6px;
+      margin-bottom: 8px;
+    }
+    .chip-group { display: flex; flex-direction: column; gap: 2px; }
+
+    /* Filter chip */
+    .filter-chip {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 5px 10px 5px 8px;
+      border-radius: 8px;
+      cursor: pointer;
+      background: none;
+      border: none;
+      color: var(--on-sv);
+      font-family: inherit;
+      font-size: 13px;
+      text-align: left;
+      transition: background .15s, color .15s;
+      user-select: none;
+    }
+    .filter-chip:hover { background: var(--outline-v); color: var(--on-surface); }
+    .filter-chip.checked { color: var(--on-surface); }
+    .filter-chip input { display: none; }
+    .chip-box {
+      width: 16px; height: 16px;
+      border-radius: 4px;
+      border: 1.5px solid var(--outline);
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+      font-size: 12px;
+      transition: background .15s, border-color .15s;
+      color: var(--on-primary);
+    }
+    .filter-chip.checked .chip-box {
+      background: var(--primary);
+      border-color: var(--primary);
+    }
+    .chip-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+    .chip-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    .btn-text {
+      background: none; border: none;
+      color: var(--primary);
+      font-family: inherit; font-size: 12px; font-weight: 500;
+      cursor: pointer; padding: 6px 8px; margin-top: 4px;
+      border-radius: 4px;
+      letter-spacing: .02em;
+      transition: opacity .15s;
+    }
+    .btn-text:hover { opacity: .75; }
+
+    .drawer-footer {
+      padding: 12px 16px;
+      border-top: 1px solid var(--outline-v);
+      font-size: 11px;
+      color: var(--on-sv);
+      line-height: 1.7;
+    }
+
+    /* ── Main panel ── */
+    .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+    /* ── Top bar / tabs ── */
+    .top-bar {
+      display: flex;
+      align-items: stretch;
+      background: var(--surface-c);
+      border-bottom: 1px solid var(--outline-v);
+      flex-shrink: 0;
+    }
+    .tab-bar { display: flex; flex: 1; overflow-x: auto; scrollbar-width: none; }
+    .tab-bar::-webkit-scrollbar { display: none; }
+    .tab-btn {
+      display: flex; align-items: center; gap: 6px;
+      padding: 0 20px;
+      height: 52px;
+      font-family: inherit; font-size: 13px; font-weight: 500; letter-spacing: .02em;
+      color: var(--on-sv);
+      background: none; border: none; cursor: pointer;
+      border-bottom: 2px solid transparent;
+      white-space: nowrap;
+      transition: color .2s, border-color .2s;
+    }
+    .tab-btn:hover { color: var(--on-surface); }
+    .tab-btn.active { color: var(--primary); border-bottom-color: var(--primary); }
+    .tab-btn .material-icons-round { font-size: 18px; }
+
+    .theme-btn {
+      padding: 0 14px;
+      border: none; background: none;
+      cursor: pointer;
+      color: var(--on-sv);
+      display: flex; align-items: center;
+      transition: color .15s;
+    }
+    .theme-btn:hover { color: var(--on-surface); }
+    .theme-btn .material-icons-round { font-size: 22px; }
+
+    /* ── Content scroll area ── */
+    .content { flex: 1; overflow-y: auto; padding: 20px; }
+    .content::-webkit-scrollbar { width: 6px; }
+    .content::-webkit-scrollbar-thumb { background: var(--outline-v); border-radius: 3px; }
+
+    /* ── Card ── */
+    .card {
+      background: var(--surface);
+      border-radius: 16px;
+      border: 1px solid var(--outline-v);
+      transition: background .3s, border-color .3s;
+    }
+
+    /* ── Controls bar ── */
+    .ctrl-bar {
+      display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-end;
+      padding: 14px 18px;
+      margin-bottom: 14px;
+    }
+    .field { display: flex; flex-direction: column; gap: 4px; }
+    .field-lbl {
+      font-size: 10px; font-weight: 600;
+      color: var(--on-sv);
+      text-transform: uppercase; letter-spacing: .07em;
+    }
+    .md-select {
+      background: var(--surface-c);
+      border: 1.5px solid var(--outline-v);
+      border-radius: 8px;
+      padding: 7px 28px 7px 10px;
+      font-family: inherit; font-size: 13px;
+      color: var(--on-surface);
+      cursor: pointer; outline: none; appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23888'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 9px center;
+      min-width: 168px;
+      transition: border-color .15s;
+    }
+    .md-select:focus { border-color: var(--primary); }
+
+    /* Toggle switch */
+    .toggle-wrap {
+      display: flex; align-items: center; gap: 7px;
+      cursor: pointer; font-size: 13px; color: var(--on-sv);
+      user-select: none;
+    }
+    .toggle-wrap input { display: none; }
+    .toggle-track {
+      width: 38px; height: 22px; border-radius: 11px;
+      background: var(--outline);
+      position: relative;
+      transition: background .2s;
+      flex-shrink: 0;
+    }
+    .toggle-track::after {
+      content: '';
+      position: absolute;
+      width: 16px; height: 16px; border-radius: 50%;
+      background: white;
+      top: 3px; left: 3px;
+      transition: transform .2s, width .1s;
+      box-shadow: 0 1px 3px rgba(0,0,0,.3);
+    }
+    .toggle-wrap input:checked ~ .toggle-track { background: var(--primary); }
+    .toggle-wrap input:checked ~ .toggle-track::after { transform: translateX(16px); }
+    .toggle-wrap input:disabled ~ .toggle-track { opacity: .35; cursor: not-allowed; }
+    .toggle-lbl { color: var(--on-sv); }
+
+    /* Chart wrap */
+    .chart-card { background: var(--surface); border-radius: 16px; border: 1px solid var(--outline-v); overflow: hidden; }
+
+    /* ── Company Detail ── */
+    #detail-panel {
+      margin-top: 14px;
+      padding: 20px;
+      border-radius: 16px;
+      background: var(--surface);
+      border: 1px solid var(--outline-v);
+      animation: fadein .2s ease;
+    }
+    @keyframes fadein { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:none; } }
+
+    .detail-hdr { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 14px; }
+    .detail-ticker {
+      font-family: 'Roboto Mono', monospace;
+      font-size: 12px; font-weight: 500;
+      color: var(--primary);
+      letter-spacing: .06em;
+      margin-bottom: 3px;
+    }
+    .detail-company { font-size: 19px; font-weight: 500; color: var(--on-surface); }
+    .detail-meta { font-size: 12px; color: var(--on-sv); margin-top: 3px; }
+
+    .btn-icon {
+      padding: 7px; border-radius: 50%;
+      border: none; background: none; cursor: pointer;
+      color: var(--on-sv);
+      display: flex; align-items: center;
+      transition: background .15s, color .15s;
+    }
+    .btn-icon:hover { background: var(--outline-v); color: var(--on-surface); }
+    .btn-icon .material-icons-round { font-size: 20px; }
+
+    .metrics-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(138px, 1fr));
+      gap: 8px;
+    }
+    .metric-card {
+      background: var(--surface-c);
+      border-radius: 12px;
+      border: 1px solid var(--outline-v);
+      padding: 11px 13px;
+    }
+    .metric-card .m-lbl {
+      font-size: 10px; font-weight: 600;
+      color: var(--on-sv);
+      text-transform: uppercase; letter-spacing: .06em;
+      margin-bottom: 5px;
+    }
+    .metric-card .m-val {
+      font-family: 'Roboto Mono', monospace;
+      font-size: 16px; font-weight: 500;
+      color: var(--on-surface);
+    }
+
+    /* ── Sector breakdown ── */
+    .seg-btns { display: flex; gap: 4px; }
+    .seg-btn {
+      padding: 6px 16px;
+      border-radius: 20px;
+      border: 1.5px solid var(--outline-v);
+      background: none; cursor: pointer;
+      font-family: inherit; font-size: 13px;
+      color: var(--on-sv);
+      transition: all .15s;
+    }
+    .seg-btn.active {
+      background: var(--primary-c);
+      border-color: var(--primary);
+      color: var(--on-primary-c);
+      font-weight: 500;
+    }
+
+    /* ── Table ── */
+    .tbl-toolbar {
+      display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+      padding: 14px 18px; margin-bottom: 12px;
+    }
+    .search-wrap {
+      display: flex; align-items: center; gap: 8px;
+      background: var(--surface-c);
+      border: 1.5px solid var(--outline-v);
+      border-radius: 24px;
+      padding: 7px 14px;
+      transition: border-color .15s;
+    }
+    .search-wrap:focus-within { border-color: var(--primary); }
+    .search-wrap .material-icons-round { font-size: 18px; color: var(--on-sv); }
+    .search-wrap input {
+      background: none; border: none; outline: none;
+      color: var(--on-surface); font-family: inherit; font-size: 14px;
+      width: 196px;
+    }
+    .search-wrap input::placeholder { color: var(--on-sv); }
+
+    .btn-filled {
+      display: flex; align-items: center; gap: 5px;
+      padding: 8px 18px;
+      border-radius: 20px;
+      background: var(--primary); color: var(--on-primary);
+      border: none; cursor: pointer;
+      font-family: inherit; font-size: 13px; font-weight: 500;
+      letter-spacing: .02em;
+      transition: opacity .15s;
+      margin-left: auto;
+    }
+    .btn-filled:hover { opacity: .88; }
+    .btn-filled .material-icons-round { font-size: 16px; }
+
+    .col-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+    .col-chip {
+      padding: 4px 10px;
+      border-radius: 8px;
+      border: 1.5px solid var(--outline-v);
+      background: none; cursor: pointer;
+      font-family: inherit; font-size: 12px;
+      color: var(--on-sv);
+      transition: all .15s;
+    }
+    .col-chip.active {
+      background: var(--primary-c);
+      border-color: var(--primary);
+      color: var(--on-primary-c);
+    }
+
+    .tbl-wrap {
+      overflow: auto;
+      border-radius: 16px;
+      border: 1px solid var(--outline-v);
+    }
+    .tbl-wrap::-webkit-scrollbar { width: 6px; height: 6px; }
+    .tbl-wrap::-webkit-scrollbar-thumb { background: var(--outline-v); border-radius: 3px; }
+
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    thead { position: sticky; top: 0; z-index: 2; }
+    thead tr { background: var(--surface-c); }
+    th {
+      padding: 10px 14px;
+      text-align: left;
+      font-size: 11px; font-weight: 600;
+      color: var(--on-sv);
+      text-transform: uppercase; letter-spacing: .06em;
+      white-space: nowrap;
+      border-bottom: 1px solid var(--outline-v);
+    }
     th.sortable { cursor: pointer; user-select: none; }
-    th.sortable:hover { background: #e5e7eb; }
-    th .sort-icon { margin-left: 4px; opacity: 0.4; }
-    th.asc .sort-icon::after { content: "▲"; opacity: 1; }
+    th.sortable:hover { color: var(--on-surface); }
+    .sort-icon { margin-left: 3px; font-size: 10px; opacity: .45; }
+    th.asc  .sort-icon::after { content: "▲"; opacity: 1; }
     th.desc .sort-icon::after { content: "▼"; opacity: 1; }
     th:not(.asc):not(.desc) .sort-icon::after { content: "⇅"; }
-    #table-body tr:hover { background: #f0f9ff; }
-    .metric-card { background: white; border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px 14px; }
-    .metric-card .label { font-size: 11px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.05em; }
-    .metric-card .value { font-size: 18px; font-weight: 600; color: #111827; margin-top: 2px; }
+
+    tbody tr { background: var(--surface); transition: background .1s; }
+    tbody tr:hover { background: var(--surface-c); }
+    td {
+      padding: 8px 14px;
+      color: var(--on-surface);
+      white-space: nowrap;
+      border-bottom: 1px solid var(--outline-v);
+    }
+    tbody tr:last-child td { border-bottom: none; }
+    td.mono { font-family: 'Roboto Mono', monospace; font-size: 12px; }
+
+    .tbl-footer { font-size: 11px; color: var(--on-sv); margin-top: 7px; padding-left: 2px; }
+
+    .hidden { display: none !important; }
+    .pulse { animation: pulse 1.4s ease infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
   </style>
 </head>
-<body class="bg-gray-100 flex h-screen overflow-hidden">
+<body>
 
-<!-- ── Sidebar ─────────────────────────────────────────────── -->
-<aside class="w-60 flex-shrink-0 bg-gray-900 text-white flex flex-col overflow-y-auto">
-  <div class="p-4 border-b border-gray-700">
-    <h1 class="text-lg font-bold">S&amp;P 500 Explorer</h1>
-    <p id="company-count" class="text-sm text-gray-400 mt-1">Loading…</p>
+<!-- ── Navigation Drawer ────────────────────────────────────── -->
+<nav class="drawer">
+  <div class="drawer-header">
+    <div class="drawer-title">S&amp;P 500 Explorer</div>
+    <div id="company-count" class="drawer-subtitle pulse">Loading…</div>
   </div>
-  <div class="p-4 flex-1">
-    <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Sectors</p>
-    <div id="sector-filters" class="space-y-1 text-sm"></div>
-    <button id="toggle-all" class="mt-3 text-xs text-blue-400 hover:text-blue-300">Deselect all</button>
+  <div class="drawer-body">
+    <div class="section-label">Sectors</div>
+    <div id="sector-filters" class="chip-group"></div>
+    <button id="toggle-all" class="btn-text">Deselect all</button>
   </div>
-  <div class="p-4 border-t border-gray-700 text-xs text-gray-500">
-    Data: SEC EDGAR XBRL<br/>Updated on script run
+  <div class="drawer-footer">
+    Source: SEC EDGAR XBRL<br/>Refreshed on each script run
   </div>
-</aside>
+</nav>
 
-<!-- ── Main ───────────────────────────────────────────────── -->
-<main class="flex-1 flex flex-col overflow-hidden">
-
-  <!-- Tab bar -->
-  <div class="bg-white border-b border-gray-200 px-4 flex items-center gap-2 flex-shrink-0">
-    <button class="tab-btn active" data-tab="bubble">📈 Bubble Chart</button>
-    <button class="tab-btn" data-tab="sector">🏭 Sector Breakdown</button>
-    <button class="tab-btn" data-tab="table">📋 Data Table</button>
+<!-- ── Main ─────────────────────────────────────────────────── -->
+<main class="main">
+  <div class="top-bar">
+    <div class="tab-bar">
+      <button class="tab-btn active" data-tab="bubble">
+        <span class="material-icons-round">bubble_chart</span>Bubble Chart
+      </button>
+      <button class="tab-btn" data-tab="sector">
+        <span class="material-icons-round">bar_chart</span>Sector Breakdown
+      </button>
+      <button class="tab-btn" data-tab="table">
+        <span class="material-icons-round">table_rows</span>Data Table
+      </button>
+    </div>
+    <button class="theme-btn" id="theme-btn" title="Toggle theme">
+      <span class="material-icons-round" id="theme-icon">light_mode</span>
+    </button>
   </div>
 
-  <!-- Tab panels -->
-  <div class="flex-1 overflow-auto p-4">
+  <div class="content">
 
-    <!-- ── Bubble Chart ── -->
+    <!-- ── Bubble Chart ─────────────────────────── -->
     <div id="tab-bubble">
-      <div class="flex flex-wrap gap-4 items-center mb-3 bg-white rounded-lg p-3 shadow-sm">
-        <label class="flex flex-col text-xs text-gray-500">X Axis
-          <select id="x-axis" class="mt-1 text-sm border rounded px-2 py-1 text-gray-800"></select>
+      <div class="card ctrl-bar">
+        <div class="field">
+          <span class="field-lbl">X Axis</span>
+          <select id="x-axis" class="md-select"></select>
+        </div>
+        <div class="field">
+          <span class="field-lbl">Y Axis</span>
+          <select id="y-axis" class="md-select"></select>
+        </div>
+        <div class="field">
+          <span class="field-lbl">Bubble Size</span>
+          <select id="size-axis" class="md-select"></select>
+        </div>
+        <label class="toggle-wrap">
+          <input type="checkbox" id="log-x" />
+          <span class="toggle-track"></span>
+          <span class="toggle-lbl">Log X</span>
         </label>
-        <label class="flex flex-col text-xs text-gray-500">Y Axis
-          <select id="y-axis" class="mt-1 text-sm border rounded px-2 py-1 text-gray-800"></select>
-        </label>
-        <label class="flex flex-col text-xs text-gray-500">Bubble Size
-          <select id="size-axis" class="mt-1 text-sm border rounded px-2 py-1 text-gray-800"></select>
-        </label>
-        <label class="flex items-center gap-1 text-sm text-gray-700 mt-3">
-          <input type="checkbox" id="log-x" class="rounded" /> Log X
-        </label>
-        <label class="flex items-center gap-1 text-sm text-gray-700 mt-3">
-          <input type="checkbox" id="log-y" class="rounded" /> Log Y
+        <label class="toggle-wrap">
+          <input type="checkbox" id="log-y" />
+          <span class="toggle-track"></span>
+          <span class="toggle-lbl">Log Y</span>
         </label>
       </div>
-      <div id="bubble-chart" class="bg-white rounded-lg shadow-sm"></div>
 
-      <!-- Company detail panel -->
-      <div id="detail-panel" class="hidden mt-4 bg-white rounded-lg shadow-sm p-4">
-        <div class="flex items-start justify-between">
+      <div class="chart-card"><div id="bubble-chart"></div></div>
+
+      <div id="detail-panel" class="hidden">
+        <div class="detail-hdr">
           <div>
-            <h2 id="detail-name" class="text-xl font-bold text-gray-900"></h2>
-            <p id="detail-meta" class="text-sm text-gray-500 mt-1"></p>
+            <div class="detail-ticker" id="detail-ticker"></div>
+            <div class="detail-company" id="detail-name"></div>
+            <div class="detail-meta" id="detail-meta"></div>
           </div>
-          <button id="close-detail" class="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
+          <button class="btn-icon" id="close-detail">
+            <span class="material-icons-round">close</span>
+          </button>
         </div>
-        <div id="detail-metrics" class="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4"></div>
+        <div class="metrics-grid" id="detail-metrics"></div>
       </div>
     </div>
 
-    <!-- ── Sector Breakdown ── -->
+    <!-- ── Sector Breakdown ──────────────────────── -->
     <div id="tab-sector" class="hidden">
-      <div class="flex flex-wrap gap-4 items-center mb-3 bg-white rounded-lg p-3 shadow-sm">
-        <label class="flex flex-col text-xs text-gray-500">Metric
-          <select id="sector-metric" class="mt-1 text-sm border rounded px-2 py-1 text-gray-800"></select>
-        </label>
-        <div class="flex gap-3 items-center mt-3 text-sm text-gray-700">
-          <label class="flex items-center gap-1"><input type="radio" name="agg" value="mean" checked /> Mean</label>
-          <label class="flex items-center gap-1"><input type="radio" name="agg" value="median" /> Median</label>
+      <div class="card ctrl-bar">
+        <div class="field">
+          <span class="field-lbl">Metric</span>
+          <select id="sector-metric" class="md-select"></select>
+        </div>
+        <div class="field">
+          <span class="field-lbl">Aggregation</span>
+          <div class="seg-btns">
+            <button class="seg-btn active" data-agg="mean">Mean</button>
+            <button class="seg-btn" data-agg="median">Median</button>
+          </div>
         </div>
       </div>
-      <div id="sector-chart" class="bg-white rounded-lg shadow-sm"></div>
+      <div class="chart-card"><div id="sector-chart"></div></div>
     </div>
 
-    <!-- ── Data Table ── -->
+    <!-- ── Data Table ────────────────────────────── -->
     <div id="tab-table" class="hidden">
-      <div class="flex flex-wrap gap-3 items-center mb-3 bg-white rounded-lg p-3 shadow-sm">
-        <input id="search" type="search" placeholder="Search ticker or company…"
-               class="border rounded px-3 py-1.5 text-sm w-56" />
-        <button id="download-btn"
-                class="ml-auto px-3 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700">
-          ⬇ Download CSV
+      <div class="card tbl-toolbar">
+        <div class="search-wrap">
+          <span class="material-icons-round">search</span>
+          <input id="search" type="search" placeholder="Search ticker or company…" />
+        </div>
+        <button id="download-btn" class="btn-filled">
+          <span class="material-icons-round">download</span>Download CSV
         </button>
       </div>
-      <div class="bg-white rounded-lg shadow-sm p-3 mb-3">
-        <p class="text-xs text-gray-500 font-medium mb-2">Columns</p>
-        <div id="col-toggles" class="flex flex-wrap gap-2 text-xs"></div>
+      <div class="card" style="padding:12px 16px;margin-bottom:12px">
+        <div class="section-label" style="margin-bottom:8px">Columns</div>
+        <div id="col-toggles" class="col-chips"></div>
       </div>
-      <div class="overflow-auto rounded-lg shadow-sm">
-        <table class="w-full text-sm bg-white">
-          <thead id="table-head" class="bg-gray-50 text-gray-600 sticky top-0"></thead>
-          <tbody id="table-body" class="divide-y divide-gray-100"></tbody>
+      <div class="tbl-wrap">
+        <table>
+          <thead id="table-head"></thead>
+          <tbody id="table-body"></tbody>
         </table>
       </div>
-      <p id="table-count" class="text-xs text-gray-400 mt-2"></p>
+      <div class="tbl-footer" id="table-count"></div>
     </div>
 
-  </div><!-- /overflow-auto -->
+  </div>
 </main>
 
 <script>
-// ── Constants ────────────────────────────────────────────────────────────────
+// ── Constants ────────────────────────────────────────────────
 const CSV_URL = "https://raw.githubusercontent.com/JJRPF/company-data-tool/main/sp500_revenue_per_share.csv";
 
 const SECTOR_COLORS = {
@@ -150,9 +591,9 @@ const METRICS = [
   { key: "net_income",           label: "Net Income",           unit: "B$" },
   { key: "operating_income",     label: "Operating Income",     unit: "B$" },
   { key: "gross_profit",         label: "Gross Profit",         unit: "B$" },
-  { key: "revenue_per_share",    label: "Revenue per Share",    unit: "$"  },
+  { key: "revenue_per_share",    label: "Revenue / Share",      unit: "$"  },
   { key: "eps",                  label: "EPS",                  unit: "$"  },
-  { key: "book_value_per_share", label: "Book Value per Share", unit: "$"  },
+  { key: "book_value_per_share", label: "Book Value / Share",   unit: "$"  },
   { key: "profit_margin",        label: "Profit Margin",        unit: "%"  },
   { key: "operating_margin",     label: "Operating Margin",     unit: "%"  },
   { key: "gross_margin",         label: "Gross Margin",         unit: "%"  },
@@ -165,12 +606,12 @@ const METRICS = [
 ];
 
 const ALL_COLS = [
-  { key: "ticker",              label: "Ticker"             },
-  { key: "company",             label: "Company"            },
-  { key: "gics_sector",         label: "Sector"             },
-  { key: "gics_sub_industry",   label: "Sub-Industry"       },
-  { key: "headquarters",        label: "HQ"                 },
-  { key: "year_founded",        label: "Founded"            },
+  { key: "ticker",            label: "Ticker"       },
+  { key: "company",           label: "Company"      },
+  { key: "gics_sector",       label: "Sector"       },
+  { key: "gics_sub_industry", label: "Sub-Industry" },
+  { key: "headquarters",      label: "HQ"           },
+  { key: "year_founded",      label: "Founded"      },
   ...METRICS.map(m => ({ key: m.key, label: m.label })),
 ];
 
@@ -179,16 +620,44 @@ const DEFAULT_VISIBLE = new Set([
   "profit_margin","revenue_per_share","eps","total_assets",
 ]);
 
-// ── State ────────────────────────────────────────────────────────────────────
-let allData = [];
-let filteredData = [];
+// ── State ────────────────────────────────────────────────────
+let allData = [], filteredData = [];
 let activeTab = "bubble";
-let sortKey = null;
-let sortDir = 1; // 1 = asc, -1 = desc
+let sortKey = null, sortDir = -1;
 let visibleCols = new Set(DEFAULT_VISIBLE);
 let searchQuery = "";
+let selectedAgg = "mean";
+let isDark = true;
 
-// ── Utilities ────────────────────────────────────────────────────────────────
+// ── Theme ────────────────────────────────────────────────────
+function setTheme(dark) {
+  isDark = dark;
+  document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
+  document.getElementById("theme-icon").textContent = dark ? "light_mode" : "dark_mode";
+}
+
+// Detect system preference on load
+if (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches) {
+  setTheme(false);
+}
+
+document.getElementById("theme-btn").addEventListener("click", () => setTheme(!isDark));
+
+// Plotly theme helper — reads live CSS vars
+function plt() {
+  const s = getComputedStyle(document.documentElement);
+  const g = (v) => s.getPropertyValue(v).trim();
+  return {
+    paper_bgcolor: g("--plt-bg"),
+    plot_bgcolor:  g("--plt-bg"),
+    font: { color: g("--plt-font"), family: "Roboto, sans-serif", size: 12 },
+    xaxis: { gridcolor: g("--plt-grid"), zerolinecolor: g("--plt-zero"), linecolor: g("--outline-v") },
+    yaxis: { gridcolor: g("--plt-grid"), zerolinecolor: g("--plt-zero"), linecolor: g("--outline-v") },
+    legend: { bgcolor: "rgba(0,0,0,0)", font: { color: g("--plt-font") } },
+  };
+}
+
+// ── Helpers ──────────────────────────────────────────────────
 function fmt(value, unit) {
   if (value == null || (typeof value === "number" && isNaN(value))) return "N/A";
   if (typeof value !== "number") return value;
@@ -203,77 +672,83 @@ function metaFor(key) {
   return METRICS.find(m => m.key === key) || { label: key, unit: "" };
 }
 
-function normalizeSizes(values, minPx, maxPx) {
+function normalizeSizes(values, lo, hi) {
   const valid = values.filter(v => v != null && !isNaN(v));
-  if (!valid.length) return values.map(() => minPx);
-  const min = Math.min(...valid), max = Math.max(...valid);
+  if (!valid.length) return values.map(() => lo);
+  const mn = Math.min(...valid), mx = Math.max(...valid);
   return values.map(v =>
-    (v == null || isNaN(v)) ? minPx
-    : minPx + (maxPx - minPx) * (v - min) / (max - min + 1e-9)
+    (v == null || isNaN(v)) ? lo : lo + (hi - lo) * (v - mn) / (mx - mn + 1e-9)
   );
 }
 
 function groupBy(arr, key) {
-  return arr.reduce((acc, r) => {
-    (acc[r[key]] = acc[r[key]] || []).push(r); return acc;
-  }, {});
+  return arr.reduce((acc, r) => { (acc[r[key]] = acc[r[key]] || []).push(r); return acc; }, {});
 }
 
 function mean(rows, key) {
-  const vals = rows.map(r => r[key]).filter(v => v != null && !isNaN(v));
-  return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+  const vs = rows.map(r => r[key]).filter(v => v != null && !isNaN(v));
+  return vs.length ? vs.reduce((a,b) => a+b, 0) / vs.length : null;
 }
 
 function median(rows, key) {
-  const vals = rows.map(r => r[key]).filter(v => v != null && !isNaN(v)).sort((a, b) => a - b);
-  if (!vals.length) return null;
-  const mid = Math.floor(vals.length / 2);
-  return vals.length % 2 ? vals[mid] : (vals[mid - 1] + vals[mid]) / 2;
+  const vs = rows.map(r => r[key]).filter(v => v != null && !isNaN(v)).sort((a,b) => a-b);
+  if (!vs.length) return null;
+  const m = Math.floor(vs.length / 2);
+  return vs.length % 2 ? vs[m] : (vs[m-1] + vs[m]) / 2;
 }
 
-function canUseLog(data, key) {
+function canLog(data, key) {
   return data.every(r => r[key] == null || isNaN(r[key]) || r[key] > 0);
 }
 
-// ── Init ─────────────────────────────────────────────────────────────────────
+// ── Data load ────────────────────────────────────────────────
 Papa.parse(CSV_URL, {
-  download: true,
-  header: true,
-  dynamicTyping: true,
+  download: true, header: true, dynamicTyping: true,
   complete: ({ data }) => {
     allData = data.filter(r => r.ticker);
+    document.getElementById("company-count").classList.remove("pulse");
     buildSectorFilters();
     buildAxisSelectors();
     buildColToggles();
     applyFilters();
   },
-  error: (err) => {
+  error: () => {
     document.getElementById("company-count").textContent = "Error loading data";
-    console.error(err);
+    document.getElementById("company-count").classList.remove("pulse");
   },
 });
 
-// ── Sector filters ───────────────────────────────────────────────────────────
+// ── Sector filters ───────────────────────────────────────────
 function buildSectorFilters() {
   const sectors = [...new Set(allData.map(r => r.gics_sector))].filter(Boolean).sort();
   const container = document.getElementById("sector-filters");
   container.innerHTML = "";
   for (const sector of sectors) {
     const color = SECTOR_COLORS[sector] || "#888";
-    const label = document.createElement("label");
-    label.className = "flex items-center gap-2 cursor-pointer";
-    label.innerHTML = `
-      <input type="checkbox" class="sector-cb rounded" value="${sector}" checked />
-      <span class="w-2.5 h-2.5 rounded-full flex-shrink-0" style="background:${color}"></span>
-      <span class="truncate text-gray-300">${sector}</span>`;
-    container.appendChild(label);
-    label.querySelector("input").addEventListener("change", applyFilters);
+    const wrap = document.createElement("label");
+    wrap.className = "filter-chip checked";
+    wrap.innerHTML = `
+      <input type="checkbox" class="sector-cb" value="${sector}" checked />
+      <span class="chip-box">✓</span>
+      <span class="chip-dot" style="background:${color}"></span>
+      <span class="chip-label">${sector}</span>`;
+    container.appendChild(wrap);
+    wrap.querySelector("input").addEventListener("change", e => {
+      wrap.classList.toggle("checked", e.target.checked);
+      wrap.querySelector(".chip-box").textContent = e.target.checked ? "✓" : "";
+      applyFilters();
+    });
   }
 
   let allChecked = true;
   document.getElementById("toggle-all").addEventListener("click", () => {
     allChecked = !allChecked;
-    document.querySelectorAll(".sector-cb").forEach(cb => cb.checked = allChecked);
+    document.querySelectorAll(".sector-cb").forEach(cb => {
+      cb.checked = allChecked;
+      const lbl = cb.closest(".filter-chip");
+      lbl.classList.toggle("checked", allChecked);
+      lbl.querySelector(".chip-box").textContent = allChecked ? "✓" : "";
+    });
     document.getElementById("toggle-all").textContent = allChecked ? "Deselect all" : "Select all";
     applyFilters();
   });
@@ -283,29 +758,36 @@ function getCheckedSectors() {
   return [...document.querySelectorAll(".sector-cb:checked")].map(cb => cb.value);
 }
 
-// ── Axis selectors ───────────────────────────────────────────────────────────
+// ── Axis selectors ───────────────────────────────────────────
 function buildAxisSelectors() {
   const opts = METRICS.map(m => `<option value="${m.key}">${m.label}</option>`).join("");
-  document.getElementById("x-axis").innerHTML = opts;
-  document.getElementById("y-axis").innerHTML = opts;
-  document.getElementById("size-axis").innerHTML = opts;
-  document.getElementById("sector-metric").innerHTML = opts;
-
+  ["x-axis","y-axis","size-axis","sector-metric"].forEach(id => {
+    document.getElementById(id).innerHTML = opts;
+  });
   document.getElementById("x-axis").value = "revenue_per_share";
   document.getElementById("y-axis").value = "profit_margin";
   document.getElementById("size-axis").value = "total_assets";
 
-  ["x-axis","y-axis","size-axis","log-x","log-y"].forEach(id => {
-    document.getElementById(id).addEventListener("change", redraw);
-  });
+  ["x-axis","y-axis","size-axis","log-x","log-y"].forEach(id =>
+    document.getElementById(id).addEventListener("change", redraw)
+  );
   document.getElementById("sector-metric").addEventListener("change", redraw);
-  document.querySelectorAll("input[name='agg']").forEach(r => r.addEventListener("change", redraw));
+
+  // Segmented buttons for agg
+  document.querySelectorAll(".seg-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      selectedAgg = btn.dataset.agg;
+      document.querySelectorAll(".seg-btn").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      redraw();
+    });
+  });
 }
 
-// ── Filter + redraw ───────────────────────────────────────────────────────────
+// ── Filter + redraw ──────────────────────────────────────────
 function applyFilters() {
-  const selected = new Set(getCheckedSectors());
-  filteredData = allData.filter(r => selected.has(r.gics_sector));
+  const sel = new Set(getCheckedSectors());
+  filteredData = allData.filter(r => sel.has(r.gics_sector));
   document.getElementById("company-count").textContent =
     filteredData.length + " / " + allData.length + " companies";
   redraw();
@@ -317,7 +799,7 @@ function redraw() {
   if (activeTab === "table")  buildTable();
 }
 
-// ── Tabs ──────────────────────────────────────────────────────────────────────
+// ── Tabs ─────────────────────────────────────────────────────
 document.querySelectorAll(".tab-btn").forEach(btn => {
   btn.addEventListener("click", () => {
     document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
@@ -329,23 +811,24 @@ document.querySelectorAll(".tab-btn").forEach(btn => {
   });
 });
 
-// ── Bubble Chart ──────────────────────────────────────────────────────────────
+// Redraw on theme change so Plotly picks up new colors
+document.getElementById("theme-btn").addEventListener("click", () => {
+  setTimeout(redraw, 50); // after CSS vars update
+});
+
+// ── Bubble Chart ─────────────────────────────────────────────
 function drawBubble(data) {
-  const xKey  = document.getElementById("x-axis").value;
-  const yKey  = document.getElementById("y-axis").value;
-  const sKey  = document.getElementById("size-axis").value;
-  const logX  = document.getElementById("log-x").checked;
-  const logY  = document.getElementById("log-y").checked;
+  const xKey = document.getElementById("x-axis").value;
+  const yKey = document.getElementById("y-axis").value;
+  const sKey = document.getElementById("size-axis").value;
 
-  // Disable log if negatives present
-  const logXCb = document.getElementById("log-x");
-  const logYCb = document.getElementById("log-y");
-  logXCb.disabled = !canUseLog(data, xKey);
-  logYCb.disabled = !canUseLog(data, yKey);
-  if (logXCb.disabled) logXCb.checked = false;
-  if (logYCb.disabled) logYCb.checked = false;
+  const logXEl = document.getElementById("log-x");
+  const logYEl = document.getElementById("log-y");
+  logXEl.disabled = !canLog(data, xKey); if (logXEl.disabled) logXEl.checked = false;
+  logYEl.disabled = !canLog(data, yKey); if (logYEl.disabled) logYEl.checked = false;
 
-  const xMeta = metaFor(xKey), yMeta = metaFor(yKey), sMeta = metaFor(sKey);
+  const logX = logXEl.checked, logY = logYEl.checked;
+  const xM = metaFor(xKey), yM = metaFor(yKey), sM = metaFor(sKey);
 
   const sectors = [...new Set(data.map(r => r.gics_sector))].filter(Boolean).sort();
   const traces = sectors.map(sector => {
@@ -354,65 +837,63 @@ function drawBubble(data) {
       r[xKey] != null && !isNaN(r[xKey]) &&
       r[yKey] != null && !isNaN(r[yKey])
     );
-    const sizeVals = rows.map(r => (r[sKey] != null && !isNaN(r[sKey])) ? Math.abs(r[sKey]) : null);
-    const sizes = normalizeSizes(sizeVals, 5, 55);
-
-    const hoverText = rows.map(r =>
-      `<b>${r.ticker}</b> — ${r.company}<br>` +
-      `${xMeta.label}: ${fmt(r[xKey], xMeta.unit)}<br>` +
-      `${yMeta.label}: ${fmt(r[yKey], yMeta.unit)}<br>` +
-      `${sMeta.label}: ${fmt(r[sKey], sMeta.unit)}<br>` +
-      `Sector: ${r.gics_sector}`
-    );
-
+    const sVals = rows.map(r => (r[sKey] != null && !isNaN(r[sKey])) ? Math.abs(r[sKey]) : null);
     return {
-      type: "scatter",
-      mode: "markers",
+      type: "scatter", mode: "markers",
       name: sector,
       x: rows.map(r => r[xKey]),
       y: rows.map(r => r[yKey]),
-      text: hoverText,
+      text: rows.map(r =>
+        `<b>${r.ticker}</b> — ${r.company}<br>` +
+        `${xM.label}: ${fmt(r[xKey], xM.unit)}<br>` +
+        `${yM.label}: ${fmt(r[yKey], yM.unit)}<br>` +
+        `${sM.label}: ${fmt(r[sKey], sM.unit)}<br>` +
+        `Sector: ${r.gics_sector}`
+      ),
       hoverinfo: "text",
       customdata: rows,
       marker: {
-        size: sizes,
+        size: normalizeSizes(sVals, 5, 52),
         color: SECTOR_COLORS[sector] || "#888",
-        opacity: 0.75,
-        line: { width: 0.5, color: "white" },
+        opacity: 0.78,
+        line: { width: 0.8, color: isDark ? "rgba(255,255,255,0.15)" : "rgba(0,0,0,0.1)" },
       },
     };
   });
 
+  const theme = plt();
   Plotly.newPlot("bubble-chart", traces, {
-    xaxis: { title: xMeta.label, type: logX ? "log" : "linear", zeroline: false },
-    yaxis: { title: yMeta.label, type: logY ? "log" : "linear", zeroline: false },
+    ...theme,
+    xaxis: { ...theme.xaxis, title: { text: xM.label, font: { color: theme.font.color } }, type: logX ? "log" : "linear", zeroline: false },
+    yaxis: { ...theme.yaxis, title: { text: yM.label, font: { color: theme.font.color } }, type: logY ? "log" : "linear", zeroline: false },
     height: 520,
-    legend: { title: { text: "Sector" }, orientation: "v" },
-    margin: { l: 60, r: 20, t: 30, b: 60 },
+    legend: { ...theme.legend, title: { text: "Sector", font: { color: theme.font.color } }, orientation: "v" },
+    margin: { l: 56, r: 16, t: 24, b: 52 },
     hovermode: "closest",
-  }, { responsive: true });
+  }, { responsive: true, displaylogo: false });
 
   document.getElementById("bubble-chart").on("plotly_click", ({ points }) => {
     showDetail(points[0].customdata);
   });
 }
 
-// ── Company Detail ────────────────────────────────────────────────────────────
+// ── Company Detail ───────────────────────────────────────────
 function showDetail(row) {
-  document.getElementById("detail-name").textContent = `${row.ticker} — ${row.company}`;
+  document.getElementById("detail-ticker").textContent = row.ticker;
+  document.getElementById("detail-name").textContent = row.company;
   document.getElementById("detail-meta").textContent =
-    [row.gics_sector, row.gics_sub_industry, row.headquarters, row.year_founded ? `Est. ${row.year_founded}` : null]
-      .filter(Boolean).join("  ·  ");
+    [row.gics_sector, row.gics_sub_industry, row.headquarters,
+     row.year_founded ? `Est. ${row.year_founded}` : null]
+    .filter(Boolean).join("  ·  ");
 
   const grid = document.getElementById("detail-metrics");
   grid.innerHTML = "";
   for (const m of METRICS) {
-    const card = document.createElement("div");
-    card.className = "metric-card";
-    card.innerHTML = `<div class="label">${m.label}</div><div class="value">${fmt(row[m.key], m.unit)}</div>`;
-    grid.appendChild(card);
+    const c = document.createElement("div");
+    c.className = "metric-card";
+    c.innerHTML = `<div class="m-lbl">${m.label}</div><div class="m-val">${fmt(row[m.key], m.unit)}</div>`;
+    grid.appendChild(c);
   }
-
   document.getElementById("detail-panel").classList.remove("hidden");
   document.getElementById("detail-panel").scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
@@ -421,50 +902,51 @@ document.getElementById("close-detail").addEventListener("click", () => {
   document.getElementById("detail-panel").classList.add("hidden");
 });
 
-// ── Sector Breakdown ──────────────────────────────────────────────────────────
+// ── Sector Breakdown ─────────────────────────────────────────
 function drawSector(data) {
-  const metricKey = document.getElementById("sector-metric").value;
-  const aggFn = document.querySelector("input[name='agg']:checked").value === "median" ? median : mean;
-  const meta = metaFor(metricKey);
+  const key = document.getElementById("sector-metric").value;
+  const meta = metaFor(key);
+  const aggFn = selectedAgg === "median" ? median : mean;
+  const aggLabel = selectedAgg === "median" ? "Median" : "Mean";
 
   const grouped = groupBy(data, "gics_sector");
   const rows = Object.entries(grouped)
-    .map(([sector, items]) => ({ sector, value: aggFn(items, metricKey), count: items.length }))
+    .map(([sector, items]) => ({ sector, value: aggFn(items, key), count: items.length }))
     .filter(r => r.value != null)
     .sort((a, b) => a.value - b.value);
 
-  const aggLabel = document.querySelector("input[name='agg']:checked").value === "median" ? "Median" : "Mean";
-
+  const theme = plt();
   Plotly.newPlot("sector-chart", [{
-    type: "bar",
-    orientation: "h",
+    type: "bar", orientation: "h",
     x: rows.map(r => r.value),
     y: rows.map(r => r.sector),
-    marker: { color: rows.map(r => SECTOR_COLORS[r.sector] || "#888") },
+    marker: { color: rows.map(r => SECTOR_COLORS[r.sector] || "#888"), opacity: 0.85 },
     customdata: rows.map(r => r.count),
     hovertemplate: "<b>%{y}</b><br>" + aggLabel + " " + meta.label + ": %{x:.3g}<br>%{customdata} companies<extra></extra>",
   }], {
+    ...theme,
+    xaxis: { ...theme.xaxis, title: { text: `${aggLabel} ${meta.label}`, font: { color: theme.font.color } }, zeroline: false },
+    yaxis: { ...theme.yaxis, zeroline: false },
     height: 460,
     showlegend: false,
-    xaxis: { title: `${aggLabel} ${meta.label}` },
-    margin: { l: 190, r: 40, t: 30, b: 60 },
-  }, { responsive: true });
+    margin: { l: 188, r: 32, t: 20, b: 52 },
+  }, { responsive: true, displaylogo: false });
 }
 
-// ── Data Table ────────────────────────────────────────────────────────────────
+// ── Data Table ───────────────────────────────────────────────
 function buildColToggles() {
   const container = document.getElementById("col-toggles");
   for (const col of ALL_COLS) {
-    const label = document.createElement("label");
-    label.className = "flex items-center gap-1 cursor-pointer px-2 py-1 rounded border border-gray-200 hover:bg-gray-50";
-    const checked = visibleCols.has(col.key) ? "checked" : "";
-    label.innerHTML = `<input type="checkbox" class="col-cb" value="${col.key}" ${checked} /><span>${col.label}</span>`;
-    container.appendChild(label);
-    label.querySelector("input").addEventListener("change", e => {
-      if (e.target.checked) visibleCols.add(col.key);
-      else visibleCols.delete(col.key);
+    const btn = document.createElement("button");
+    btn.className = "col-chip" + (visibleCols.has(col.key) ? " active" : "");
+    btn.textContent = col.label;
+    btn.addEventListener("click", () => {
+      if (visibleCols.has(col.key)) visibleCols.delete(col.key);
+      else visibleCols.add(col.key);
+      btn.classList.toggle("active", visibleCols.has(col.key));
       buildTable();
     });
+    container.appendChild(btn);
   }
 }
 
@@ -477,8 +959,7 @@ function getTableData() {
     rows = [...rows].sort((a, b) => {
       const av = a[sortKey], bv = b[sortKey];
       if (av == null && bv == null) return 0;
-      if (av == null) return 1;
-      if (bv == null) return -1;
+      if (av == null) return 1; if (bv == null) return -1;
       return (av < bv ? -1 : av > bv ? 1 : 0) * sortDir;
     });
   }
@@ -489,50 +970,45 @@ function buildTable() {
   const cols = ALL_COLS.filter(c => visibleCols.has(c.key));
   const rows = getTableData();
 
-  // Header
   const thead = document.getElementById("table-head");
   thead.innerHTML = "<tr>" + cols.map(c => {
-    const cls = sortKey === c.key ? (sortDir === 1 ? "asc" : "desc") : "";
-    return `<th class="px-3 py-2 text-left text-xs font-semibold sortable ${cls}" data-key="${c.key}">${c.label}<span class="sort-icon"></span></th>`;
+    const dir = sortKey === c.key ? (sortDir === 1 ? "asc" : "desc") : "";
+    return `<th class="sortable ${dir}" data-key="${c.key}">${c.label}<span class="sort-icon"></span></th>`;
   }).join("") + "</tr>";
 
-  thead.querySelectorAll("th.sortable").forEach(th => {
+  thead.querySelectorAll("th").forEach(th => {
     th.addEventListener("click", () => {
-      const key = th.dataset.key;
-      if (sortKey === key) sortDir *= -1;
-      else { sortKey = key; sortDir = -1; }
+      const k = th.dataset.key;
+      if (sortKey === k) sortDir *= -1; else { sortKey = k; sortDir = -1; }
       buildTable();
     });
   });
 
-  // Body
   const tbody = document.getElementById("table-body");
   tbody.innerHTML = rows.map(r =>
     "<tr>" + cols.map(c => {
-      const meta = metaFor(c.key);
-      const val = meta.unit ? fmt(r[c.key], meta.unit) : (r[c.key] ?? "—");
-      return `<td class="px-3 py-1.5 whitespace-nowrap text-gray-800">${val}</td>`;
+      const m = metaFor(c.key);
+      const v = m.unit ? fmt(r[c.key], m.unit) : (r[c.key] ?? "—");
+      const mono = m.unit ? " class=\"mono\"" : "";
+      return `<td${mono}>${v}</td>`;
     }).join("") + "</tr>"
   ).join("");
 
   document.getElementById("table-count").textContent =
-    rows.length + " of " + filteredData.length + " companies shown";
+    rows.length + " of " + filteredData.length + " companies";
 }
 
-// Search
 document.getElementById("search").addEventListener("input", e => {
   searchQuery = e.target.value;
   buildTable();
 });
 
-// Download
 document.getElementById("download-btn").addEventListener("click", () => {
-  const rows = getTableData();
-  const csv = Papa.unparse(rows);
-  const blob = new Blob([csv], { type: "text/csv" });
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = "sp500_filtered.csv";
+  const csv = Papa.unparse(getTableData());
+  const a = Object.assign(document.createElement("a"), {
+    href: URL.createObjectURL(new Blob([csv], { type: "text/csv" })),
+    download: "sp500_filtered.csv",
+  });
   a.click();
   URL.revokeObjectURL(a.href);
 });
