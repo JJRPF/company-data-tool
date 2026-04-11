@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>S&amp;P 500 Explorer</title>
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@3/dist/tailwind.min.css" rel="stylesheet" />
+  <script src="https://cdn.plot.ly/plotly-2.30.0.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+  <style>
+    .tab-btn { @apply px-4 py-2 text-sm font-medium rounded-t-lg border-b-2 border-transparent text-gray-500 hover:text-gray-700; }
+    .tab-btn.active { @apply border-blue-500 text-blue-600; }
+    th.sortable { cursor: pointer; user-select: none; }
+    th.sortable:hover { background: #e5e7eb; }
+    th .sort-icon { margin-left: 4px; opacity: 0.4; }
+    th.asc .sort-icon::after { content: "▲"; opacity: 1; }
+    th.desc .sort-icon::after { content: "▼"; opacity: 1; }
+    th:not(.asc):not(.desc) .sort-icon::after { content: "⇅"; }
+    #table-body tr:hover { background: #f0f9ff; }
+    .metric-card { background: white; border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px 14px; }
+    .metric-card .label { font-size: 11px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.05em; }
+    .metric-card .value { font-size: 18px; font-weight: 600; color: #111827; margin-top: 2px; }
+  </style>
+</head>
+<body class="bg-gray-100 flex h-screen overflow-hidden">
+
+<!-- ── Sidebar ─────────────────────────────────────────────── -->
+<aside class="w-60 flex-shrink-0 bg-gray-900 text-white flex flex-col overflow-y-auto">
+  <div class="p-4 border-b border-gray-700">
+    <h1 class="text-lg font-bold">S&amp;P 500 Explorer</h1>
+    <p id="company-count" class="text-sm text-gray-400 mt-1">Loading…</p>
+  </div>
+  <div class="p-4 flex-1">
+    <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Sectors</p>
+    <div id="sector-filters" class="space-y-1 text-sm"></div>
+    <button id="toggle-all" class="mt-3 text-xs text-blue-400 hover:text-blue-300">Deselect all</button>
+  </div>
+  <div class="p-4 border-t border-gray-700 text-xs text-gray-500">
+    Data: SEC EDGAR XBRL<br/>Updated on script run
+  </div>
+</aside>
+
+<!-- ── Main ───────────────────────────────────────────────── -->
+<main class="flex-1 flex flex-col overflow-hidden">
+
+  <!-- Tab bar -->
+  <div class="bg-white border-b border-gray-200 px-4 flex items-center gap-2 flex-shrink-0">
+    <button class="tab-btn active" data-tab="bubble">📈 Bubble Chart</button>
+    <button class="tab-btn" data-tab="sector">🏭 Sector Breakdown</button>
+    <button class="tab-btn" data-tab="table">📋 Data Table</button>
+  </div>
+
+  <!-- Tab panels -->
+  <div class="flex-1 overflow-auto p-4">
+
+    <!-- ── Bubble Chart ── -->
+    <div id="tab-bubble">
+      <div class="flex flex-wrap gap-4 items-center mb-3 bg-white rounded-lg p-3 shadow-sm">
+        <label class="flex flex-col text-xs text-gray-500">X Axis
+          <select id="x-axis" class="mt-1 text-sm border rounded px-2 py-1 text-gray-800"></select>
+        </label>
+        <label class="flex flex-col text-xs text-gray-500">Y Axis
+          <select id="y-axis" class="mt-1 text-sm border rounded px-2 py-1 text-gray-800"></select>
+        </label>
+        <label class="flex flex-col text-xs text-gray-500">Bubble Size
+          <select id="size-axis" class="mt-1 text-sm border rounded px-2 py-1 text-gray-800"></select>
+        </label>
+        <label class="flex items-center gap-1 text-sm text-gray-700 mt-3">
+          <input type="checkbox" id="log-x" class="rounded" /> Log X
+        </label>
+        <label class="flex items-center gap-1 text-sm text-gray-700 mt-3">
+          <input type="checkbox" id="log-y" class="rounded" /> Log Y
+        </label>
+      </div>
+      <div id="bubble-chart" class="bg-white rounded-lg shadow-sm"></div>
+
+      <!-- Company detail panel -->
+      <div id="detail-panel" class="hidden mt-4 bg-white rounded-lg shadow-sm p-4">
+        <div class="flex items-start justify-between">
+          <div>
+            <h2 id="detail-name" class="text-xl font-bold text-gray-900"></h2>
+            <p id="detail-meta" class="text-sm text-gray-500 mt-1"></p>
+          </div>
+          <button id="close-detail" class="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
+        </div>
+        <div id="detail-metrics" class="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4"></div>
+      </div>
+    </div>
+
+    <!-- ── Sector Breakdown ── -->
+    <div id="tab-sector" class="hidden">
+      <div class="flex flex-wrap gap-4 items-center mb-3 bg-white rounded-lg p-3 shadow-sm">
+        <label class="flex flex-col text-xs text-gray-500">Metric
+          <select id="sector-metric" class="mt-1 text-sm border rounded px-2 py-1 text-gray-800"></select>
+        </label>
+        <div class="flex gap-3 items-center mt-3 text-sm text-gray-700">
+          <label class="flex items-center gap-1"><input type="radio" name="agg" value="mean" checked /> Mean</label>
+          <label class="flex items-center gap-1"><input type="radio" name="agg" value="median" /> Median</label>
+        </div>
+      </div>
+      <div id="sector-chart" class="bg-white rounded-lg shadow-sm"></div>
+    </div>
+
+    <!-- ── Data Table ── -->
+    <div id="tab-table" class="hidden">
+      <div class="flex flex-wrap gap-3 items-center mb-3 bg-white rounded-lg p-3 shadow-sm">
+        <input id="search" type="search" placeholder="Search ticker or company…"
+               class="border rounded px-3 py-1.5 text-sm w-56" />
+        <button id="download-btn"
+                class="ml-auto px-3 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700">
+          ⬇ Download CSV
+        </button>
+      </div>
+      <div class="bg-white rounded-lg shadow-sm p-3 mb-3">
+        <p class="text-xs text-gray-500 font-medium mb-2">Columns</p>
+        <div id="col-toggles" class="flex flex-wrap gap-2 text-xs"></div>
+      </div>
+      <div class="overflow-auto rounded-lg shadow-sm">
+        <table class="w-full text-sm bg-white">
+          <thead id="table-head" class="bg-gray-50 text-gray-600 sticky top-0"></thead>
+          <tbody id="table-body" class="divide-y divide-gray-100"></tbody>
+        </table>
+      </div>
+      <p id="table-count" class="text-xs text-gray-400 mt-2"></p>
+    </div>
+
+  </div><!-- /overflow-auto -->
+</main>
+
+<script>
+// ── Constants ────────────────────────────────────────────────────────────────
+const CSV_URL = "https://raw.githubusercontent.com/JJRPF/company-data-tool/main/sp500_revenue_per_share.csv";
+
+const SECTOR_COLORS = {
+  "Industrials":            "#4C78A8",
+  "Financials":             "#F58518",
+  "Information Technology": "#54A24B",
+  "Health Care":            "#E45756",
+  "Consumer Discretionary": "#72B7B2",
+  "Consumer Staples":       "#EECA3B",
+  "Utilities":              "#B279A2",
+  "Real Estate":            "#FF9DA6",
+  "Materials":              "#9D755D",
+  "Communication Services": "#BAB0AC",
+  "Energy":                 "#DC143C",
+};
+
+const METRICS = [
+  { key: "revenue",              label: "Revenue",              unit: "B$" },
+  { key: "net_income",           label: "Net Income",           unit: "B$" },
+  { key: "operating_income",     label: "Operating Income",     unit: "B$" },
+  { key: "gross_profit",         label: "Gross Profit",         unit: "B$" },
+  { key: "revenue_per_share",    label: "Revenue per Share",    unit: "$"  },
+  { key: "eps",                  label: "EPS",                  unit: "$"  },
+  { key: "book_value_per_share", label: "Book Value per Share", unit: "$"  },
+  { key: "profit_margin",        label: "Profit Margin",        unit: "%"  },
+  { key: "operating_margin",     label: "Operating Margin",     unit: "%"  },
+  { key: "gross_margin",         label: "Gross Margin",         unit: "%"  },
+  { key: "total_assets",         label: "Total Assets",         unit: "B$" },
+  { key: "total_liabilities",    label: "Total Liabilities",    unit: "B$" },
+  { key: "stockholders_equity",  label: "Stockholders Equity",  unit: "B$" },
+  { key: "cash_and_equivalents", label: "Cash & Equivalents",   unit: "B$" },
+  { key: "long_term_debt",       label: "Long-Term Debt",       unit: "B$" },
+  { key: "shares_outstanding",   label: "Shares Outstanding",   unit: "M"  },
+];
+
+const ALL_COLS = [
+  { key: "ticker",              label: "Ticker"             },
+  { key: "company",             label: "Company"            },
+  { key: "gics_sector",         label: "Sector"             },
+  { key: "gics_sub_industry",   label: "Sub-Industry"       },
+  { key: "headquarters",        label: "HQ"                 },
+  { key: "year_founded",        label: "Founded"            },
+  ...METRICS.map(m => ({ key: m.key, label: m.label })),
+];
+
+const DEFAULT_VISIBLE = new Set([
+  "ticker","company","gics_sector","revenue","net_income",
+  "profit_margin","revenue_per_share","eps","total_assets",
+]);
+
+// ── State ────────────────────────────────────────────────────────────────────
+let allData = [];
+let filteredData = [];
+let activeTab = "bubble";
+let sortKey = null;
+let sortDir = 1; // 1 = asc, -1 = desc
+let visibleCols = new Set(DEFAULT_VISIBLE);
+let searchQuery = "";
+
+// ── Utilities ────────────────────────────────────────────────────────────────
+function fmt(value, unit) {
+  if (value == null || (typeof value === "number" && isNaN(value))) return "N/A";
+  if (typeof value !== "number") return value;
+  if (unit === "B$") return "$" + (value / 1e9).toFixed(2) + "B";
+  if (unit === "$")  return "$" + value.toFixed(2);
+  if (unit === "%")  return (value * 100).toFixed(1) + "%";
+  if (unit === "M")  return (value / 1e6).toFixed(1) + "M";
+  return value.toString();
+}
+
+function metaFor(key) {
+  return METRICS.find(m => m.key === key) || { label: key, unit: "" };
+}
+
+function normalizeSizes(values, minPx, maxPx) {
+  const valid = values.filter(v => v != null && !isNaN(v));
+  if (!valid.length) return values.map(() => minPx);
+  const min = Math.min(...valid), max = Math.max(...valid);
+  return values.map(v =>
+    (v == null || isNaN(v)) ? minPx
+    : minPx + (maxPx - minPx) * (v - min) / (max - min + 1e-9)
+  );
+}
+
+function groupBy(arr, key) {
+  return arr.reduce((acc, r) => {
+    (acc[r[key]] = acc[r[key]] || []).push(r); return acc;
+  }, {});
+}
+
+function mean(rows, key) {
+  const vals = rows.map(r => r[key]).filter(v => v != null && !isNaN(v));
+  return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+}
+
+function median(rows, key) {
+  const vals = rows.map(r => r[key]).filter(v => v != null && !isNaN(v)).sort((a, b) => a - b);
+  if (!vals.length) return null;
+  const mid = Math.floor(vals.length / 2);
+  return vals.length % 2 ? vals[mid] : (vals[mid - 1] + vals[mid]) / 2;
+}
+
+function canUseLog(data, key) {
+  return data.every(r => r[key] == null || isNaN(r[key]) || r[key] > 0);
+}
+
+// ── Init ─────────────────────────────────────────────────────────────────────
+Papa.parse(CSV_URL, {
+  download: true,
+  header: true,
+  dynamicTyping: true,
+  complete: ({ data }) => {
+    allData = data.filter(r => r.ticker);
+    buildSectorFilters();
+    buildAxisSelectors();
+    buildColToggles();
+    applyFilters();
+  },
+  error: (err) => {
+    document.getElementById("company-count").textContent = "Error loading data";
+    console.error(err);
+  },
+});
+
+// ── Sector filters ───────────────────────────────────────────────────────────
+function buildSectorFilters() {
+  const sectors = [...new Set(allData.map(r => r.gics_sector))].filter(Boolean).sort();
+  const container = document.getElementById("sector-filters");
+  container.innerHTML = "";
+  for (const sector of sectors) {
+    const color = SECTOR_COLORS[sector] || "#888";
+    const label = document.createElement("label");
+    label.className = "flex items-center gap-2 cursor-pointer";
+    label.innerHTML = `
+      <input type="checkbox" class="sector-cb rounded" value="${sector}" checked />
+      <span class="w-2.5 h-2.5 rounded-full flex-shrink-0" style="background:${color}"></span>
+      <span class="truncate text-gray-300">${sector}</span>`;
+    container.appendChild(label);
+    label.querySelector("input").addEventListener("change", applyFilters);
+  }
+
+  let allChecked = true;
+  document.getElementById("toggle-all").addEventListener("click", () => {
+    allChecked = !allChecked;
+    document.querySelectorAll(".sector-cb").forEach(cb => cb.checked = allChecked);
+    document.getElementById("toggle-all").textContent = allChecked ? "Deselect all" : "Select all";
+    applyFilters();
+  });
+}
+
+function getCheckedSectors() {
+  return [...document.querySelectorAll(".sector-cb:checked")].map(cb => cb.value);
+}
+
+// ── Axis selectors ───────────────────────────────────────────────────────────
+function buildAxisSelectors() {
+  const opts = METRICS.map(m => `<option value="${m.key}">${m.label}</option>`).join("");
+  document.getElementById("x-axis").innerHTML = opts;
+  document.getElementById("y-axis").innerHTML = opts;
+  document.getElementById("size-axis").innerHTML = opts;
+  document.getElementById("sector-metric").innerHTML = opts;
+
+  document.getElementById("x-axis").value = "revenue_per_share";
+  document.getElementById("y-axis").value = "profit_margin";
+  document.getElementById("size-axis").value = "total_assets";
+
+  ["x-axis","y-axis","size-axis","log-x","log-y"].forEach(id => {
+    document.getElementById(id).addEventListener("change", redraw);
+  });
+  document.getElementById("sector-metric").addEventListener("change", redraw);
+  document.querySelectorAll("input[name='agg']").forEach(r => r.addEventListener("change", redraw));
+}
+
+// ── Filter + redraw ───────────────────────────────────────────────────────────
+function applyFilters() {
+  const selected = new Set(getCheckedSectors());
+  filteredData = allData.filter(r => selected.has(r.gics_sector));
+  document.getElementById("company-count").textContent =
+    filteredData.length + " / " + allData.length + " companies";
+  redraw();
+}
+
+function redraw() {
+  if (activeTab === "bubble") drawBubble(filteredData);
+  if (activeTab === "sector") drawSector(filteredData);
+  if (activeTab === "table")  buildTable();
+}
+
+// ── Tabs ──────────────────────────────────────────────────────────────────────
+document.querySelectorAll(".tab-btn").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    activeTab = btn.dataset.tab;
+    document.querySelectorAll("[id^='tab-']").forEach(el => el.classList.add("hidden"));
+    document.getElementById("tab-" + activeTab).classList.remove("hidden");
+    redraw();
+  });
+});
+
+// ── Bubble Chart ──────────────────────────────────────────────────────────────
+function drawBubble(data) {
+  const xKey  = document.getElementById("x-axis").value;
+  const yKey  = document.getElementById("y-axis").value;
+  const sKey  = document.getElementById("size-axis").value;
+  const logX  = document.getElementById("log-x").checked;
+  const logY  = document.getElementById("log-y").checked;
+
+  // Disable log if negatives present
+  const logXCb = document.getElementById("log-x");
+  const logYCb = document.getElementById("log-y");
+  logXCb.disabled = !canUseLog(data, xKey);
+  logYCb.disabled = !canUseLog(data, yKey);
+  if (logXCb.disabled) logXCb.checked = false;
+  if (logYCb.disabled) logYCb.checked = false;
+
+  const xMeta = metaFor(xKey), yMeta = metaFor(yKey), sMeta = metaFor(sKey);
+
+  const sectors = [...new Set(data.map(r => r.gics_sector))].filter(Boolean).sort();
+  const traces = sectors.map(sector => {
+    const rows = data.filter(r =>
+      r.gics_sector === sector &&
+      r[xKey] != null && !isNaN(r[xKey]) &&
+      r[yKey] != null && !isNaN(r[yKey])
+    );
+    const sizeVals = rows.map(r => (r[sKey] != null && !isNaN(r[sKey])) ? Math.abs(r[sKey]) : null);
+    const sizes = normalizeSizes(sizeVals, 5, 55);
+
+    const hoverText = rows.map(r =>
+      `<b>${r.ticker}</b> — ${r.company}<br>` +
+      `${xMeta.label}: ${fmt(r[xKey], xMeta.unit)}<br>` +
+      `${yMeta.label}: ${fmt(r[yKey], yMeta.unit)}<br>` +
+      `${sMeta.label}: ${fmt(r[sKey], sMeta.unit)}<br>` +
+      `Sector: ${r.gics_sector}`
+    );
+
+    return {
+      type: "scatter",
+      mode: "markers",
+      name: sector,
+      x: rows.map(r => r[xKey]),
+      y: rows.map(r => r[yKey]),
+      text: hoverText,
+      hoverinfo: "text",
+      customdata: rows,
+      marker: {
+        size: sizes,
+        color: SECTOR_COLORS[sector] || "#888",
+        opacity: 0.75,
+        line: { width: 0.5, color: "white" },
+      },
+    };
+  });
+
+  Plotly.newPlot("bubble-chart", traces, {
+    xaxis: { title: xMeta.label, type: logX ? "log" : "linear", zeroline: false },
+    yaxis: { title: yMeta.label, type: logY ? "log" : "linear", zeroline: false },
+    height: 520,
+    legend: { title: { text: "Sector" }, orientation: "v" },
+    margin: { l: 60, r: 20, t: 30, b: 60 },
+    hovermode: "closest",
+  }, { responsive: true });
+
+  document.getElementById("bubble-chart").on("plotly_click", ({ points }) => {
+    showDetail(points[0].customdata);
+  });
+}
+
+// ── Company Detail ────────────────────────────────────────────────────────────
+function showDetail(row) {
+  document.getElementById("detail-name").textContent = `${row.ticker} — ${row.company}`;
+  document.getElementById("detail-meta").textContent =
+    [row.gics_sector, row.gics_sub_industry, row.headquarters, row.year_founded ? `Est. ${row.year_founded}` : null]
+      .filter(Boolean).join("  ·  ");
+
+  const grid = document.getElementById("detail-metrics");
+  grid.innerHTML = "";
+  for (const m of METRICS) {
+    const card = document.createElement("div");
+    card.className = "metric-card";
+    card.innerHTML = `<div class="label">${m.label}</div><div class="value">${fmt(row[m.key], m.unit)}</div>`;
+    grid.appendChild(card);
+  }
+
+  document.getElementById("detail-panel").classList.remove("hidden");
+  document.getElementById("detail-panel").scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+document.getElementById("close-detail").addEventListener("click", () => {
+  document.getElementById("detail-panel").classList.add("hidden");
+});
+
+// ── Sector Breakdown ──────────────────────────────────────────────────────────
+function drawSector(data) {
+  const metricKey = document.getElementById("sector-metric").value;
+  const aggFn = document.querySelector("input[name='agg']:checked").value === "median" ? median : mean;
+  const meta = metaFor(metricKey);
+
+  const grouped = groupBy(data, "gics_sector");
+  const rows = Object.entries(grouped)
+    .map(([sector, items]) => ({ sector, value: aggFn(items, metricKey), count: items.length }))
+    .filter(r => r.value != null)
+    .sort((a, b) => a.value - b.value);
+
+  const aggLabel = document.querySelector("input[name='agg']:checked").value === "median" ? "Median" : "Mean";
+
+  Plotly.newPlot("sector-chart", [{
+    type: "bar",
+    orientation: "h",
+    x: rows.map(r => r.value),
+    y: rows.map(r => r.sector),
+    marker: { color: rows.map(r => SECTOR_COLORS[r.sector] || "#888") },
+    customdata: rows.map(r => r.count),
+    hovertemplate: "<b>%{y}</b><br>" + aggLabel + " " + meta.label + ": %{x:.3g}<br>%{customdata} companies<extra></extra>",
+  }], {
+    height: 460,
+    showlegend: false,
+    xaxis: { title: `${aggLabel} ${meta.label}` },
+    margin: { l: 190, r: 40, t: 30, b: 60 },
+  }, { responsive: true });
+}
+
+// ── Data Table ────────────────────────────────────────────────────────────────
+function buildColToggles() {
+  const container = document.getElementById("col-toggles");
+  for (const col of ALL_COLS) {
+    const label = document.createElement("label");
+    label.className = "flex items-center gap-1 cursor-pointer px-2 py-1 rounded border border-gray-200 hover:bg-gray-50";
+    const checked = visibleCols.has(col.key) ? "checked" : "";
+    label.innerHTML = `<input type="checkbox" class="col-cb" value="${col.key}" ${checked} /><span>${col.label}</span>`;
+    container.appendChild(label);
+    label.querySelector("input").addEventListener("change", e => {
+      if (e.target.checked) visibleCols.add(col.key);
+      else visibleCols.delete(col.key);
+      buildTable();
+    });
+  }
+}
+
+function getTableData() {
+  const q = searchQuery.toLowerCase();
+  let rows = filteredData.filter(r =>
+    !q || r.ticker?.toLowerCase().includes(q) || r.company?.toLowerCase().includes(q)
+  );
+  if (sortKey) {
+    rows = [...rows].sort((a, b) => {
+      const av = a[sortKey], bv = b[sortKey];
+      if (av == null && bv == null) return 0;
+      if (av == null) return 1;
+      if (bv == null) return -1;
+      return (av < bv ? -1 : av > bv ? 1 : 0) * sortDir;
+    });
+  }
+  return rows;
+}
+
+function buildTable() {
+  const cols = ALL_COLS.filter(c => visibleCols.has(c.key));
+  const rows = getTableData();
+
+  // Header
+  const thead = document.getElementById("table-head");
+  thead.innerHTML = "<tr>" + cols.map(c => {
+    const cls = sortKey === c.key ? (sortDir === 1 ? "asc" : "desc") : "";
+    return `<th class="px-3 py-2 text-left text-xs font-semibold sortable ${cls}" data-key="${c.key}">${c.label}<span class="sort-icon"></span></th>`;
+  }).join("") + "</tr>";
+
+  thead.querySelectorAll("th.sortable").forEach(th => {
+    th.addEventListener("click", () => {
+      const key = th.dataset.key;
+      if (sortKey === key) sortDir *= -1;
+      else { sortKey = key; sortDir = -1; }
+      buildTable();
+    });
+  });
+
+  // Body
+  const tbody = document.getElementById("table-body");
+  tbody.innerHTML = rows.map(r =>
+    "<tr>" + cols.map(c => {
+      const meta = metaFor(c.key);
+      const val = meta.unit ? fmt(r[c.key], meta.unit) : (r[c.key] ?? "—");
+      return `<td class="px-3 py-1.5 whitespace-nowrap text-gray-800">${val}</td>`;
+    }).join("") + "</tr>"
+  ).join("");
+
+  document.getElementById("table-count").textContent =
+    rows.length + " of " + filteredData.length + " companies shown";
+}
+
+// Search
+document.getElementById("search").addEventListener("input", e => {
+  searchQuery = e.target.value;
+  buildTable();
+});
+
+// Download
+document.getElementById("download-btn").addEventListener("click", () => {
+  const rows = getTableData();
+  const csv = Papa.unparse(rows);
+  const blob = new Blob([csv], { type: "text/csv" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "sp500_filtered.csv";
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+</script>
+</body>
+</html>
