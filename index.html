@@ -439,6 +439,34 @@
     .pulse { animation: pulse 1.4s ease infinite; }
     @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
 
+    /* Growth badge on metric cards */
+    .m-growth {
+      font-size: 11px; font-weight: 500;
+      margin-top: 3px;
+      padding: 1px 5px;
+      border-radius: 4px;
+      display: inline-block;
+    }
+    .m-growth.pos { background: rgba(109,213,140,.18); color: var(--positive); }
+    .m-growth.neg { background: rgba(255,180,171,.18); color: var(--negative); }
+
+    /* Trend metric chips (same style as col-chip) */
+    .trend-chip {
+      padding: 4px 10px;
+      border-radius: 8px;
+      border: 1.5px solid var(--outline-v);
+      background: none; cursor: pointer;
+      font-family: inherit; font-size: 12px;
+      color: var(--on-sv);
+      transition: all .15s;
+    }
+    .trend-chip.active {
+      background: var(--primary-c);
+      border-color: var(--primary);
+      color: var(--on-primary-c);
+      font-weight: 500;
+    }
+
   /* ── Mobile ── */
   @media (max-width: 767px) {
     /* Drawer becomes a slide-over overlay */
@@ -526,6 +554,9 @@
       <button class="tab-btn" data-tab="table">
         <span class="material-icons-round">table_rows</span>Data Table
       </button>
+      <button class="tab-btn" data-tab="history">
+        <span class="material-icons-round">show_chart</span>History
+      </button>
     </div>
     <button class="theme-btn" id="theme-btn" title="Toggle theme">
       <span class="material-icons-round" id="theme-icon">light_mode</span>
@@ -559,6 +590,12 @@
           <span class="toggle-track"></span>
           <span class="toggle-lbl">Log Y</span>
         </label>
+        <div class="field" style="margin-left:auto">
+          <span class="field-lbl">Year</span>
+          <select id="year-select" class="md-select" style="min-width:110px">
+            <option value="latest">Latest</option>
+          </select>
+        </div>
       </div>
 
       <div class="chart-card"><div id="bubble-chart"></div></div>
@@ -575,6 +612,14 @@
           </button>
         </div>
         <div class="metrics-grid" id="detail-metrics"></div>
+        <!-- Historical trend chart (shown when history is loaded) -->
+        <div id="detail-trend-wrap" class="hidden" style="margin-top:16px">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+            <span class="section-label" style="margin-bottom:0">10-Year Trend</span>
+            <div id="trend-metric-chips" style="display:flex;flex-wrap:wrap;gap:5px;margin-left:8px"></div>
+          </div>
+          <div class="chart-card"><div id="detail-trend-chart"></div></div>
+        </div>
       </div>
     </div>
 
@@ -620,12 +665,28 @@
       <div class="tbl-footer" id="table-count"></div>
     </div>
 
+    <!-- ── History Tab ───────────────────────────────────── -->
+    <div id="tab-history" class="hidden">
+      <div class="card ctrl-bar" style="align-items:center">
+        <div class="field">
+          <span class="field-lbl">Company</span>
+          <select id="hist-company-select" class="md-select" style="min-width:220px"></select>
+        </div>
+        <div class="field">
+          <span class="field-lbl">Metrics</span>
+          <div id="hist-metric-chips" style="display:flex;flex-wrap:wrap;gap:5px"></div>
+        </div>
+      </div>
+      <div class="chart-card"><div id="hist-chart"></div></div>
+    </div>
+
   </div>
 </main>
 
 <script>
 // ── Constants ────────────────────────────────────────────────
-const CSV_URL = "https://raw.githubusercontent.com/JJRPF/company-data-tool/main/sp500_revenue_per_share.csv";
+const CSV_URL  = "https://raw.githubusercontent.com/JJRPF/company-data-tool/main/sp500_revenue_per_share.csv";
+const HIST_URL = "https://raw.githubusercontent.com/JJRPF/company-data-tool/main/sp500_historical.csv";
 
 const SECTOR_COLORS = {
   "Industrials":            "#4C78A8",
@@ -675,14 +736,33 @@ const DEFAULT_VISIBLE = new Set([
   "profit_margin","revenue_per_share","eps","total_assets",
 ]);
 
+// Metrics available in the historical CSV (subset — no balance sheet here to keep CSV lean)
+const HIST_METRICS = [
+  { key: "revenue",           label: "Revenue",        unit: "B$" },
+  { key: "net_income",        label: "Net Income",     unit: "B$" },
+  { key: "eps",               label: "EPS",            unit: "$"  },
+  { key: "revenue_per_share", label: "Rev / Share",    unit: "$"  },
+  { key: "profit_margin",     label: "Profit Margin",  unit: "%"  },
+  { key: "gross_margin",      label: "Gross Margin",   unit: "%"  },
+  { key: "total_assets",      label: "Total Assets",   unit: "B$" },
+  { key: "long_term_debt",    label: "Long-Term Debt", unit: "B$" },
+];
+const HIST_DEFAULT_ACTIVE = new Set(["revenue","net_income","eps","profit_margin"]);
+
 // ── State ────────────────────────────────────────────────────
 let allData = [], filteredData = [];
+let histByTicker = {};   // { AAPL: [{fiscal_year,revenue,...}, ...] sorted asc }
+let histLoaded = false;
+let selectedYear = "latest";   // "latest" | "2024" | "2023" | …
 let activeTab = "bubble";
 let sortKey = null, sortDir = -1;
 let visibleCols = new Set(DEFAULT_VISIBLE);
 let searchQuery = "";
 let selectedAgg = "mean";
 let isDark = true;
+let activeTrendMetrics = new Set(HIST_DEFAULT_ACTIVE);
+let activeHistMetrics  = new Set(HIST_DEFAULT_ACTIVE);
+let histCompany = null;  // ticker selected on the History tab
 
 // ── Mobile drawer ────────────────────────────────────────────
 const drawer = document.getElementById("drawer");
@@ -805,6 +885,7 @@ function canLog(data, key) {
 }
 
 // ── Data load ────────────────────────────────────────────────
+// Load both CSVs in parallel. Main CSV starts the UI; historical enriches it.
 Papa.parse(CSV_URL, {
   download: true, header: true, dynamicTyping: true,
   complete: ({ data }) => {
@@ -818,6 +899,54 @@ Papa.parse(CSV_URL, {
   error: () => {
     document.getElementById("company-count").textContent = "Error loading data";
     document.getElementById("company-count").classList.remove("pulse");
+  },
+});
+
+Papa.parse(HIST_URL, {
+  download: true, header: true, dynamicTyping: true,
+  complete: ({ data }) => {
+    const rows = data.filter(r => r.ticker && r.fiscal_year);
+    rows.forEach(r => {
+      if (!histByTicker[r.ticker]) histByTicker[r.ticker] = [];
+      histByTicker[r.ticker].push(r);
+    });
+    Object.keys(histByTicker).forEach(t =>
+      histByTicker[t].sort((a, b) => a.fiscal_year - b.fiscal_year)
+    );
+    histLoaded = true;
+
+    // Populate year selector with available years
+    const years = [...new Set(rows.map(r => r.fiscal_year))].sort((a,b) => b - a);
+    const sel = document.getElementById("year-select");
+    years.forEach(y => {
+      const o = document.createElement("option");
+      o.value = y; o.textContent = y;
+      sel.appendChild(o);
+    });
+
+    // Populate History tab company selector
+    const compSel = document.getElementById("hist-company-select");
+    const tickers = Object.keys(histByTicker).sort();
+    tickers.forEach(t => {
+      const meta = allData.find(d => d.ticker === t);
+      const o = document.createElement("option");
+      o.value = t;
+      o.textContent = meta ? `${t} — ${meta.company}` : t;
+      compSel.appendChild(o);
+    });
+    histCompany = tickers[0] || null;
+    compSel.value = histCompany;
+
+    // Build history tab metric chips
+    buildHistMetricChips();
+
+    // If detail panel is open, enrich it
+    if (!document.getElementById("detail-panel").classList.contains("hidden")) {
+      const ticker = document.getElementById("detail-ticker").textContent;
+      if (ticker) drawDetailTrend(ticker);
+    }
+    // Redraw history tab if it's active
+    if (activeTab === "history") drawHistChart();
   },
 });
 
@@ -875,6 +1004,10 @@ function buildAxisSelectors() {
     document.getElementById(id).addEventListener("change", redraw)
   );
   document.getElementById("sector-metric").addEventListener("change", redraw);
+  document.getElementById("year-select").addEventListener("change", e => {
+    selectedYear = e.target.value;
+    applyFilters();
+  });
 
   // Segmented buttons for agg
   document.querySelectorAll(".seg-btn").forEach(btn => {
@@ -888,18 +1021,33 @@ function buildAxisSelectors() {
 }
 
 // ── Filter + redraw ──────────────────────────────────────────
+function getBaseData() {
+  if (selectedYear === "latest" || !histLoaded) return allData;
+  // Build a flat array from historical data for the chosen year,
+  // enriched with metadata (sector, HQ, etc.) from allData.
+  const metaByTicker = Object.fromEntries(allData.map(d => [d.ticker, d]));
+  return Object.values(histByTicker)
+    .map(rows => rows.find(r => String(r.fiscal_year) === String(selectedYear)))
+    .filter(Boolean)
+    .map(r => ({ ...(metaByTicker[r.ticker] || {}), ...r }));
+}
+
 function applyFilters() {
+  const base = getBaseData();
   const sel = new Set(getCheckedSectors());
-  filteredData = allData.filter(r => sel.has(r.gics_sector));
+  filteredData = base.filter(r => sel.has(r.gics_sector));
+  const total = selectedYear === "latest" ? allData.length : Object.keys(histByTicker).length;
   document.getElementById("company-count").textContent =
-    filteredData.length + " / " + allData.length + " companies";
+    filteredData.length + " / " + total + " companies" +
+    (selectedYear !== "latest" ? ` (${selectedYear})` : "");
   redraw();
 }
 
 function redraw() {
-  if (activeTab === "bubble") drawBubble(filteredData);
-  if (activeTab === "sector") drawSector(filteredData);
-  if (activeTab === "table")  buildTable();
+  if (activeTab === "bubble")  drawBubble(filteredData);
+  if (activeTab === "sector")  drawSector(filteredData);
+  if (activeTab === "table")   buildTable();
+  if (activeTab === "history") drawHistChart();
 }
 
 // ── Tabs ─────────────────────────────────────────────────────
@@ -991,21 +1139,136 @@ function showDetail(row) {
      row.year_founded ? `Est. ${row.year_founded}` : null]
     .filter(Boolean).join("  ·  ");
 
+  // Compute YoY growth from historical data (latest two years)
+  const hist = histByTicker[row.ticker] || [];
+  const growthByKey = {};
+  if (hist.length >= 2) {
+    const latest = hist[hist.length - 1];
+    const prev   = hist[hist.length - 2];
+    for (const m of METRICS) {
+      const a = prev[m.key], b = latest[m.key];
+      if (a != null && b != null && !isNaN(a) && !isNaN(b) && a !== 0) {
+        growthByKey[m.key] = (b - a) / Math.abs(a);
+      }
+    }
+  }
+
   const grid = document.getElementById("detail-metrics");
   grid.innerHTML = "";
   for (const m of METRICS) {
     const c = document.createElement("div");
     c.className = "metric-card";
-    c.innerHTML = `<div class="m-lbl">${m.label}</div><div class="m-val">${fmt(row[m.key], m.unit)}</div>`;
+    const g = growthByKey[m.key];
+    const growthHtml = g != null
+      ? `<div class="m-growth ${g >= 0 ? "pos" : "neg"}">${g >= 0 ? "▲" : "▼"} ${Math.abs(g * 100).toFixed(1)}% YoY</div>`
+      : "";
+    c.innerHTML = `<div class="m-lbl">${m.label}</div><div class="m-val">${fmt(row[m.key], m.unit)}</div>${growthHtml}`;
     grid.appendChild(c);
   }
   document.getElementById("detail-panel").classList.remove("hidden");
   document.getElementById("detail-panel").scrollIntoView({ behavior: "smooth", block: "nearest" });
+
+  // Build trend metric chips if not already built
+  buildDetailTrendChips(row.ticker);
+  drawDetailTrend(row.ticker);
 }
 
 document.getElementById("close-detail").addEventListener("click", () => {
   document.getElementById("detail-panel").classList.add("hidden");
 });
+
+// ── Detail trend chart ────────────────────────────────────────
+let detailTrendChipsBuilt = false;
+function buildDetailTrendChips(ticker) {
+  const container = document.getElementById("trend-metric-chips");
+  if (detailTrendChipsBuilt) return;
+  detailTrendChipsBuilt = true;
+  container.innerHTML = "";
+  for (const m of HIST_METRICS) {
+    const btn = document.createElement("button");
+    btn.className = "trend-chip" + (activeTrendMetrics.has(m.key) ? " active" : "");
+    btn.textContent = m.label;
+    btn.style.borderColor = activeTrendMetrics.has(m.key) ? "var(--primary)" : "var(--outline-v)";
+    btn.addEventListener("click", () => {
+      if (activeTrendMetrics.has(m.key)) activeTrendMetrics.delete(m.key);
+      else activeTrendMetrics.add(m.key);
+      btn.classList.toggle("active", activeTrendMetrics.has(m.key));
+      const currentTicker = document.getElementById("detail-ticker").textContent;
+      if (currentTicker) drawDetailTrend(currentTicker);
+    });
+    container.appendChild(btn);
+  }
+}
+
+function drawDetailTrend(ticker) {
+  if (!histLoaded) return;
+  const rows = histByTicker[ticker];
+  if (!rows || !rows.length) return;
+
+  document.getElementById("detail-trend-wrap").classList.remove("hidden");
+
+  const years = rows.map(r => r.fiscal_year);
+  const theme = plt();
+
+  // Group metrics by unit type so we can use dual y-axes
+  const leftMetrics  = HIST_METRICS.filter(m => activeTrendMetrics.has(m.key) && m.unit !== "%");
+  const rightMetrics = HIST_METRICS.filter(m => activeTrendMetrics.has(m.key) && m.unit === "%");
+
+  const TREND_COLORS = ["#a8c8ff","#6dd58c","#EECA3B","#FF9DA6","#72B7B2","#B279A2","#F58518","#E45756"];
+  let colorIdx = 0;
+  const traces = [];
+
+  for (const m of leftMetrics) {
+    const vals = rows.map(r => r[m.key]);
+    traces.push({
+      type: "scatter", mode: "lines+markers",
+      name: m.label,
+      x: years, y: vals,
+      yaxis: "y",
+      line: { color: TREND_COLORS[colorIdx++ % TREND_COLORS.length], width: 2 },
+      marker: { size: 5 },
+      hovertemplate: `<b>${m.label}</b>: %{text}<extra></extra>`,
+      text: vals.map(v => fmt(v, m.unit)),
+    });
+  }
+  for (const m of rightMetrics) {
+    const vals = rows.map(r => r[m.key]);
+    traces.push({
+      type: "scatter", mode: "lines+markers",
+      name: m.label,
+      x: years, y: vals.map(v => v != null ? v * 100 : null),
+      yaxis: "y2",
+      line: { color: TREND_COLORS[colorIdx++ % TREND_COLORS.length], width: 2, dash: "dot" },
+      marker: { size: 5 },
+      hovertemplate: `<b>${m.label}</b>: %{text}<extra></extra>`,
+      text: vals.map(v => fmt(v, m.unit)),
+    });
+  }
+
+  if (!traces.length) {
+    Plotly.purge("detail-trend-chart");
+    return;
+  }
+
+  const hasRight = rightMetrics.length > 0;
+  Plotly.newPlot("detail-trend-chart", traces, {
+    ...theme,
+    xaxis: { ...theme.xaxis, tickformat: "d", zeroline: false, title: { text: "Fiscal Year", font: { color: theme.font.color } } },
+    yaxis: { ...theme.yaxis, zeroline: false, title: { text: "Value", font: { color: theme.font.color } }, ...axisFmt(leftMetrics[0]?.unit || "$") },
+    yaxis2: hasRight ? {
+      overlaying: "y", side: "right",
+      gridcolor: "transparent",
+      tickformat: ".0f", ticksuffix: "%",
+      color: theme.font.color,
+      title: { text: "Margin %", font: { color: theme.font.color } },
+    } : undefined,
+    height: 320,
+    legend: { ...theme.legend, orientation: "h", y: -0.25 },
+    margin: { l: 52, r: hasRight ? 52 : 16, t: 16, b: 60 },
+    hovermode: "x unified",
+  }, { responsive: true, displaylogo: false });
+  attachLabelPatcher("detail-trend-chart");
+}
 
 // ── Sector Breakdown ─────────────────────────────────────────
 function drawSector(data) {
@@ -1110,6 +1373,83 @@ function buildTable() {
 document.getElementById("search").addEventListener("input", e => {
   searchQuery = e.target.value;
   buildTable();
+});
+
+// ── History Tab ───────────────────────────────────────────────
+function buildHistMetricChips() {
+  const container = document.getElementById("hist-metric-chips");
+  container.innerHTML = "";
+  for (const m of HIST_METRICS) {
+    const btn = document.createElement("button");
+    btn.className = "trend-chip" + (activeHistMetrics.has(m.key) ? " active" : "");
+    btn.textContent = m.label;
+    btn.addEventListener("click", () => {
+      if (activeHistMetrics.has(m.key)) activeHistMetrics.delete(m.key);
+      else activeHistMetrics.add(m.key);
+      btn.classList.toggle("active", activeHistMetrics.has(m.key));
+      drawHistChart();
+    });
+    container.appendChild(btn);
+  }
+}
+
+function drawHistChart() {
+  if (!histLoaded || !histCompany) return;
+  const rows = histByTicker[histCompany];
+  if (!rows || !rows.length) return;
+
+  const years = rows.map(r => r.fiscal_year);
+  const theme = plt();
+  const TREND_COLORS = ["#a8c8ff","#6dd58c","#EECA3B","#FF9DA6","#72B7B2","#B279A2","#F58518","#E45756"];
+  let ci = 0;
+  const traces = [];
+  const leftMetrics  = HIST_METRICS.filter(m => activeHistMetrics.has(m.key) && m.unit !== "%");
+  const rightMetrics = HIST_METRICS.filter(m => activeHistMetrics.has(m.key) && m.unit === "%");
+
+  for (const m of leftMetrics) {
+    const vals = rows.map(r => r[m.key]);
+    traces.push({
+      type: "scatter", mode: "lines+markers",
+      name: m.label, x: years, y: vals, yaxis: "y",
+      line: { color: TREND_COLORS[ci++ % TREND_COLORS.length], width: 2.5 },
+      marker: { size: 6 },
+      hovertemplate: `<b>${m.label}</b>: %{text}<extra></extra>`,
+      text: vals.map(v => fmt(v, m.unit)),
+    });
+  }
+  for (const m of rightMetrics) {
+    const vals = rows.map(r => r[m.key]);
+    traces.push({
+      type: "scatter", mode: "lines+markers",
+      name: m.label, x: years, y: vals.map(v => v != null ? v * 100 : null), yaxis: "y2",
+      line: { color: TREND_COLORS[ci++ % TREND_COLORS.length], width: 2.5, dash: "dot" },
+      marker: { size: 6 },
+      hovertemplate: `<b>${m.label}</b>: %{text}<extra></extra>`,
+      text: vals.map(v => fmt(v, m.unit)),
+    });
+  }
+
+  if (!traces.length) { Plotly.purge("hist-chart"); return; }
+  const hasRight = rightMetrics.length > 0;
+  const meta = allData.find(d => d.ticker === histCompany);
+  Plotly.newPlot("hist-chart", traces, {
+    ...theme,
+    title: { text: meta ? `${histCompany} — ${meta.company}` : histCompany, font: { color: theme.font.color, size: 14 } },
+    xaxis: { ...theme.xaxis, tickformat: "d", zeroline: false, title: { text: "Fiscal Year", font: { color: theme.font.color } } },
+    yaxis: { ...theme.yaxis, zeroline: false, ...axisFmt(leftMetrics[0]?.unit || "$"), title: { text: "Value", font: { color: theme.font.color } } },
+    yaxis2: hasRight ? { overlaying: "y", side: "right", gridcolor: "transparent", tickformat: ".0f", ticksuffix: "%", color: theme.font.color, title: { text: "Margin %", font: { color: theme.font.color } } } : undefined,
+    height: 500,
+    legend: { ...theme.legend, orientation: "h", y: -0.2 },
+    margin: { l: 56, r: hasRight ? 56 : 20, t: 48, b: 72 },
+    hovermode: "x unified",
+  }, { responsive: true, displaylogo: false });
+  attachLabelPatcher("hist-chart");
+}
+
+// History tab company selector
+document.getElementById("hist-company-select").addEventListener("change", e => {
+  histCompany = e.target.value;
+  drawHistChart();
 });
 
 document.getElementById("download-btn").addEventListener("click", () => {

@@ -49,7 +49,11 @@ CACHE_DIR = SCRIPT_DIR / "cache"
 COMPANY_FACTS_DIR = CACHE_DIR / "company_facts"
 TICKER_CIK_CACHE = CACHE_DIR / "ticker_cik.json"
 SP500_CACHE = CACHE_DIR / "sp500.csv"
-OUTPUT_CSV = SCRIPT_DIR / "sp500_revenue_per_share.csv"
+OUTPUT_CSV      = SCRIPT_DIR / "sp500_revenue_per_share.csv"
+OUTPUT_HIST_CSV = SCRIPT_DIR / "sp500_historical.csv"
+
+# How many fiscal years of history to keep
+N_HIST_YEARS = 10
 
 # Cache TTL: SEC filings only update quarterly so 30 days is plenty
 CACHE_TTL_SECONDS = 30 * 24 * 3600
@@ -76,6 +80,16 @@ COLUMN_ORDER = [
     "cash_and_equivalents", "long_term_debt",
     # Other
     "employees", "revenue_per_employee",
+]
+
+# Historical CSV: one row per company per fiscal year
+HIST_COLUMN_ORDER = [
+    "ticker", "company", "cik", "gics_sector", "fiscal_year",
+    "revenue", "net_income", "operating_income", "gross_profit",
+    "shares_outstanding", "revenue_per_share", "eps",
+    "profit_margin", "operating_margin", "gross_margin",
+    "total_assets", "total_liabilities", "stockholders_equity",
+    "cash_and_equivalents", "long_term_debt",
 ]
 
 # ---------------------------------------------------------------------------
@@ -257,6 +271,108 @@ def latest_annual_revenue(facts: dict) -> int | float | None:
     return latest_annual_usd(facts, REVENUE_CONCEPTS)
 
 
+def all_annual_usd(
+    facts: dict, concepts: list[str], n_years: int = N_HIST_YEARS
+) -> dict[str, int | float]:
+    """
+    Like latest_annual_usd but returns ALL years, not just the most recent.
+
+    Returns {fiscal_year_str: value} where fiscal_year_str is the 4-digit year
+    of the 10-K's end date (e.g. "2023" for a Dec 31 2023 filing).
+
+    When a year has multiple filings (10-K + amended 10-K/A), keeps the one
+    with the most recent `filed` date.  Tries concepts in priority order and
+    uses the first concept that yields any annual data.
+    """
+    ns = facts.get("facts", {}).get("us-gaap", {})
+    for concept in concepts:
+        if concept not in ns:
+            continue
+        annual = [
+            e for e in ns[concept].get("units", {}).get("USD", [])
+            if e.get("fp") == "FY"
+            and "10-K" in e.get("form", "")
+            and e.get("val", 0) != 0
+            and e.get("end", "")
+        ]
+        if not annual:
+            continue
+        by_year: dict[str, dict] = {}
+        for e in annual:
+            year = e["end"][:4]
+            if year not in by_year or e.get("filed", "") > by_year[year].get("filed", ""):
+                by_year[year] = e
+        if not by_year:
+            continue
+        sorted_years = sorted(by_year.keys(), reverse=True)[:n_years]
+        return {y: by_year[y]["val"] for y in sorted_years}
+    return {}
+
+
+def all_shares_by_year(
+    facts: dict, n_years: int = N_HIST_YEARS
+) -> dict[str, int]:
+    """
+    Returns {fiscal_year_str: shares} for the last n_years.
+    Mirrors the fallback priority of latest_shares_outstanding.
+
+    Point-in-time concepts (1 & 2) group by the year of the `end` date and
+    pick the latest end date within each year.  Weighted-average concepts
+    (3 & 4) group by fiscal year end, keeping the most recently filed entry.
+    """
+    # 1 & 2: point-in-time — any filing form
+    for namespace, concept in [
+        ("us-gaap", "CommonStockSharesOutstanding"),
+        ("dei",     "EntityCommonStockSharesOutstanding"),
+    ]:
+        ns = facts.get("facts", {}).get(namespace, {})
+        if concept not in ns:
+            continue
+        entries = [
+            e for e in ns[concept].get("units", {}).get("shares", [])
+            if e.get("val", 0) != 0 and e.get("end", "")
+        ]
+        if not entries:
+            continue
+        by_year: dict[str, dict] = {}
+        for e in entries:
+            year = e["end"][:4]
+            if year not in by_year or e.get("end", "") > by_year[year].get("end", ""):
+                by_year[year] = e
+        sorted_years = sorted(by_year.keys(), reverse=True)[:n_years]
+        result = {y: by_year[y]["val"] for y in sorted_years}
+        if result:
+            return result
+
+    # 3 & 4: weighted average from annual 10-K
+    ns = facts.get("facts", {}).get("us-gaap", {})
+    for concept in (
+        "WeightedAverageNumberOfSharesOutstandingBasic",
+        "WeightedAverageNumberOfDilutedSharesOutstanding",
+    ):
+        if concept not in ns:
+            continue
+        annual = [
+            e for e in ns[concept].get("units", {}).get("shares", [])
+            if e.get("fp") == "FY"
+            and "10-K" in e.get("form", "")
+            and e.get("val", 0) != 0
+            and e.get("end", "")
+        ]
+        if not annual:
+            continue
+        by_year: dict[str, dict] = {}
+        for e in annual:
+            year = e["end"][:4]
+            if year not in by_year or e.get("filed", "") > by_year[year].get("filed", ""):
+                by_year[year] = e
+        sorted_years = sorted(by_year.keys(), reverse=True)[:n_years]
+        result = {y: by_year[y]["val"] for y in sorted_years}
+        if result:
+            return result
+    return {}
+
+
 def latest_shares_outstanding(facts: dict) -> int | None:
     """
     Find the most recent share count, trying concepts in order of preference.
@@ -410,6 +526,7 @@ def main() -> None:
     print(f"  {len(ticker_cik)} tickers in SEC's index\n")
 
     rows: list[dict] = []
+    hist_rows: list[dict] = []
     missing: list[tuple[str, str]] = []
 
     for i, row in sp500.iterrows():
@@ -456,6 +573,51 @@ def main() -> None:
         status = "ok" if rps is not None else "missing data"
         print(f"[{i + 1}/{len(sp500)}] {ticker:<6} {status}")
 
+        # ── Historical rows (one per fiscal year) ──────────────────────────
+        h_rev  = all_annual_usd(facts, REVENUE_CONCEPTS)
+        h_ni   = all_annual_usd(facts, NET_INCOME_CONCEPTS)
+        h_oi   = all_annual_usd(facts, OPERATING_INCOME_CONCEPTS)
+        h_gp   = all_annual_usd(facts, GROSS_PROFIT_CONCEPTS)
+        h_ta   = all_annual_usd(facts, TOTAL_ASSETS_CONCEPTS)
+        h_tl   = all_annual_usd(facts, TOTAL_LIABILITIES_CONCEPTS)
+        h_eq   = all_annual_usd(facts, STOCKHOLDERS_EQUITY_CONCEPTS)
+        h_cash = all_annual_usd(facts, CASH_CONCEPTS)
+        h_ltd  = all_annual_usd(facts, LONG_TERM_DEBT_CONCEPTS)
+        h_sh   = all_shares_by_year(facts)
+
+        hist_years = sorted(
+            set(h_rev.keys()) | set(h_sh.keys()), reverse=True
+        )[:N_HIST_YEARS]
+
+        for fy in hist_years:
+            rev = h_rev.get(fy)
+            ni  = h_ni.get(fy)
+            oi  = h_oi.get(fy)
+            gp  = h_gp.get(fy)
+            sh  = h_sh.get(fy)
+            hist_rows.append({
+                "ticker":              ticker,
+                "company":             company,
+                "cik":                 cik,
+                "gics_sector":         row.get("gics_sector"),
+                "fiscal_year":         int(fy),
+                "revenue":             rev,
+                "net_income":          ni,
+                "operating_income":    oi,
+                "gross_profit":        gp,
+                "shares_outstanding":  sh,
+                "revenue_per_share":   _safe_div(rev, sh),
+                "eps":                 _safe_div(ni, sh),
+                "profit_margin":       _safe_div(ni, rev),
+                "operating_margin":    _safe_div(oi, rev),
+                "gross_margin":        _safe_div(gp, rev),
+                "total_assets":        h_ta.get(fy),
+                "total_liabilities":   h_tl.get(fy),
+                "stockholders_equity": h_eq.get(fy),
+                "cash_and_equivalents":h_cash.get(fy),
+                "long_term_debt":      h_ltd.get(fy),
+            })
+
         rows.append({
             "ticker":              ticker,
             "company":             company,
@@ -488,6 +650,9 @@ def main() -> None:
     out = pd.DataFrame(rows, columns=COLUMN_ORDER)
     out.to_csv(OUTPUT_CSV, index=False)
 
+    hist_out = pd.DataFrame(hist_rows, columns=HIST_COLUMN_ORDER)
+    hist_out.to_csv(OUTPUT_HIST_CSV, index=False)
+
     total   = len(sp500)
     full    = int(out["revenue_per_share"].notna().sum())
     partial = len(out) - full
@@ -506,7 +671,8 @@ def main() -> None:
                   "total_assets", "stockholders_equity", "employees"]:
         n = int(out[field].notna().sum())
         print(f"  {field:<30} {n}/{len(out)}")
-    print(f"\nCSV written to: {OUTPUT_CSV}")
+    print(f"\nCSV written to:            {OUTPUT_CSV}")
+    print(f"Historical CSV written to: {OUTPUT_HIST_CSV} ({len(hist_rows)} rows)")
 
     if missing:
         print(f"\nFailed companies ({len(missing)}):")
