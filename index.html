@@ -721,14 +721,54 @@ function plt() {
 }
 
 // ── Helpers ──────────────────────────────────────────────────
+// Auto-scaling formatter: picks K/M/B/T suffix based on magnitude.
+// The `unit` hint only decides whether to prefix "$" and whether to
+// treat the value as a percentage.
 function fmt(value, unit) {
   if (value == null || (typeof value === "number" && isNaN(value))) return "N/A";
   if (typeof value !== "number") return value;
-  if (unit === "B$") return "$" + (value / 1e9).toFixed(2) + "B";
-  if (unit === "$")  return "$" + value.toFixed(2);
-  if (unit === "%")  return (value * 100).toFixed(1) + "%";
-  if (unit === "M")  return (value / 1e6).toFixed(1) + "M";
-  return value.toString();
+  if (unit === "%") return (value * 100).toFixed(1) + "%";
+
+  const isCurrency = unit === "$" || unit === "B$";
+  const prefix = isCurrency ? "$" : "";
+  const sign = value < 0 ? "-" : "";
+  const abs = Math.abs(value);
+
+  let scaled, suffix;
+  if      (abs >= 1e12) { scaled = abs / 1e12; suffix = "T"; }
+  else if (abs >= 1e9)  { scaled = abs / 1e9;  suffix = "B"; }
+  else if (abs >= 1e6)  { scaled = abs / 1e6;  suffix = "M"; }
+  else if (abs >= 1e3)  { scaled = abs / 1e3;  suffix = "K"; }
+  else                  { scaled = abs;        suffix = "";  }
+
+  return sign + prefix + scaled.toFixed(2) + suffix;
+}
+
+// Plotly d3-format uses "k/M/G/T" for SI; we want "K/M/B/T" for finance.
+// Returns tickformat options to pass to xaxis/yaxis for a given unit.
+function axisFmt(unit) {
+  if (unit === "%") return { tickformat: ".1%" };
+  if (unit === "$" || unit === "B$") return { tickformat: "~s", tickprefix: "$" };
+  if (unit === "M") return { tickformat: "~s" };
+  return {};
+}
+
+// After every Plotly render, rewrite d3 SI suffixes to financial ones
+// (k→K, G→B). Attached once per chart element.
+function attachLabelPatcher(id) {
+  const el = document.getElementById(id);
+  if (!el || el.__patched) return;
+  el.__patched = true;
+  const patch = () => {
+    el.querySelectorAll(".xtick text, .ytick text").forEach(t => {
+      const txt = t.textContent;
+      if (!txt) return;
+      const fixed = txt.replace(/k$/, "K").replace(/G$/, "B");
+      if (fixed !== txt) t.textContent = fixed;
+    });
+  };
+  el.on("plotly_afterplot", patch);
+  patch();
 }
 
 function metaFor(key) {
@@ -928,8 +968,8 @@ function drawBubble(data) {
   const theme = plt();
   Plotly.newPlot("bubble-chart", traces, {
     ...theme,
-    xaxis: { ...theme.xaxis, title: { text: xM.label, font: { color: theme.font.color } }, type: logX ? "log" : "linear", zeroline: false },
-    yaxis: { ...theme.yaxis, title: { text: yM.label, font: { color: theme.font.color } }, type: logY ? "log" : "linear", zeroline: false },
+    xaxis: { ...theme.xaxis, ...axisFmt(xM.unit), title: { text: xM.label, font: { color: theme.font.color } }, type: logX ? "log" : "linear", zeroline: false },
+    yaxis: { ...theme.yaxis, ...axisFmt(yM.unit), title: { text: yM.label, font: { color: theme.font.color } }, type: logY ? "log" : "linear", zeroline: false },
     height: 520,
     legend: { ...theme.legend, title: { text: "Sector", font: { color: theme.font.color } }, orientation: "v" },
     margin: { l: 56, r: 16, t: 24, b: 52 },
@@ -939,6 +979,7 @@ function drawBubble(data) {
   document.getElementById("bubble-chart").on("plotly_click", ({ points }) => {
     showDetail(points[0].customdata);
   });
+  attachLabelPatcher("bubble-chart");
 }
 
 // ── Company Detail ───────────────────────────────────────────
@@ -975,7 +1016,10 @@ function drawSector(data) {
 
   const grouped = groupBy(data, "gics_sector");
   const rows = Object.entries(grouped)
-    .map(([sector, items]) => ({ sector, value: aggFn(items, key), count: items.length }))
+    .map(([sector, items]) => {
+      const v = aggFn(items, key);
+      return { sector, value: v, count: items.length, formatted: fmt(v, meta.unit) };
+    })
     .filter(r => r.value != null)
     .sort((a, b) => a.value - b.value);
 
@@ -985,16 +1029,17 @@ function drawSector(data) {
     x: rows.map(r => r.value),
     y: rows.map(r => r.sector),
     marker: { color: rows.map(r => SECTOR_COLORS[r.sector] || "#888"), opacity: 0.85 },
-    customdata: rows.map(r => r.count),
-    hovertemplate: "<b>%{y}</b><br>" + aggLabel + " " + meta.label + ": %{x:.3g}<br>%{customdata} companies<extra></extra>",
+    customdata: rows.map(r => [r.count, r.formatted]),
+    hovertemplate: "<b>%{y}</b><br>" + aggLabel + " " + meta.label + ": %{customdata[1]}<br>%{customdata[0]} companies<extra></extra>",
   }], {
     ...theme,
-    xaxis: { ...theme.xaxis, title: { text: `${aggLabel} ${meta.label}`, font: { color: theme.font.color } }, zeroline: false },
+    xaxis: { ...theme.xaxis, ...axisFmt(meta.unit), title: { text: `${aggLabel} ${meta.label}`, font: { color: theme.font.color } }, zeroline: false },
     yaxis: { ...theme.yaxis, zeroline: false },
     height: 460,
     showlegend: false,
     margin: { l: window.innerWidth < 768 ? 120 : 188, r: 32, t: 20, b: 52 },
   }, { responsive: true, displaylogo: false });
+  attachLabelPatcher("sector-chart");
 }
 
 // ── Data Table ───────────────────────────────────────────────
