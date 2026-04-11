@@ -439,11 +439,62 @@
     .pulse { animation: pulse 1.4s ease infinite; }
     @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
   </style>
+  /* ── Mobile ── */
+  @media (max-width: 767px) {
+    /* Drawer becomes a slide-over overlay */
+    .drawer {
+      position: fixed;
+      inset: 0 auto 0 0;
+      z-index: 200;
+      width: 288px;
+      transform: translateX(-100%);
+      transition: transform .28s cubic-bezier(.4,0,.2,1);
+      box-shadow: 4px 0 32px var(--shadow);
+    }
+    .drawer.open { transform: translateX(0); }
+
+    /* Scrim behind drawer */
+    .scrim {
+      position: fixed; inset: 0;
+      z-index: 199;
+      background: rgba(0,0,0,.55);
+      opacity: 0; pointer-events: none;
+      transition: opacity .28s;
+    }
+    .scrim.visible { opacity: 1; pointer-events: auto; }
+
+    /* Show hamburger, hide desktop spacer */
+    .menu-btn { display: flex !important; }
+
+    /* Stack controls vertically, full-width selects */
+    .ctrl-bar { flex-direction: column; align-items: stretch; gap: 10px; }
+    .field { width: 100%; }
+    .md-select { min-width: unset; width: 100%; }
+    .toggle-wrap { justify-content: space-between; }
+    .seg-btns { width: 100%; }
+    .seg-btn { flex: 1; text-align: center; }
+
+    /* Search full width */
+    .search-wrap { flex: 1; }
+    .search-wrap input { width: 100%; }
+    .tbl-toolbar { flex-direction: column; align-items: stretch; }
+    .btn-filled { margin-left: 0 !important; justify-content: center; }
+
+    /* Taller bubble chart on mobile */
+    #bubble-chart, #sector-chart { min-height: 380px; }
+
+    /* Sector bar chart: narrower left margin */
+    .sector-margin { margin-left: 120px !important; }
+  }
+</style>
 </head>
 <body>
 
+<!-- Scrim (mobile drawer backdrop) -->
+<div class="scrim" id="scrim"></div>
+
 <!-- ── Navigation Drawer ────────────────────────────────────── -->
-<nav class="drawer">
+<nav class="drawer" id="drawer">
   <div class="drawer-header">
     <div class="drawer-title">S&amp;P 500 Explorer</div>
     <div id="company-count" class="drawer-subtitle pulse">Loading…</div>
@@ -461,6 +512,10 @@
 <!-- ── Main ─────────────────────────────────────────────────── -->
 <main class="main">
   <div class="top-bar">
+    <!-- Hamburger (mobile only) -->
+    <button class="theme-btn menu-btn" id="menu-btn" title="Open menu" style="display:none">
+      <span class="material-icons-round">menu</span>
+    </button>
     <div class="tab-bar">
       <button class="tab-btn active" data-tab="bubble">
         <span class="material-icons-round">bubble_chart</span>Bubble Chart
@@ -628,6 +683,14 @@ let visibleCols = new Set(DEFAULT_VISIBLE);
 let searchQuery = "";
 let selectedAgg = "mean";
 let isDark = true;
+
+// ── Mobile drawer ────────────────────────────────────────────
+const drawer = document.getElementById("drawer");
+const scrim  = document.getElementById("scrim");
+function openDrawer()  { drawer.classList.add("open");    scrim.classList.add("visible"); }
+function closeDrawer() { drawer.classList.remove("open"); scrim.classList.remove("visible"); }
+document.getElementById("menu-btn").addEventListener("click", openDrawer);
+scrim.addEventListener("click", closeDrawer);
 
 // ── Theme ────────────────────────────────────────────────────
 function setTheme(dark) {
@@ -807,6 +870,7 @@ document.querySelectorAll(".tab-btn").forEach(btn => {
     activeTab = btn.dataset.tab;
     document.querySelectorAll("[id^='tab-']").forEach(el => el.classList.add("hidden"));
     document.getElementById("tab-" + activeTab).classList.remove("hidden");
+    closeDrawer();
     redraw();
   });
 });
@@ -929,7 +993,7 @@ function drawSector(data) {
     yaxis: { ...theme.yaxis, zeroline: false },
     height: 460,
     showlegend: false,
-    margin: { l: 188, r: 32, t: 20, b: 52 },
+    margin: { l: window.innerWidth < 768 ? 120 : 188, r: 32, t: 20, b: 52 },
   }, { responsive: true, displaylogo: false });
 }
 
